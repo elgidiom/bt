@@ -517,9 +517,41 @@ async function refresh() {
   try {
     const r = await fetch('board.md?t=' + Date.now());
     if (!r.ok) throw new Error(r.status);
+
+    // Guardar valores de inputs activos (approval-input) antes de re-renderizar
+    const savedInputs = {};
+    document.querySelectorAll('.approval-input').forEach(el => {
+      const bar = el.closest('.approval-bar');
+      if (!bar) return;
+      // Identificar por task ID (el botón ✓ tiene onclick con el taskId)
+      const btn = bar.querySelector('.approval-send');
+      if (!btn) return;
+      const m = btn.getAttribute('onclick')?.match(/'([^']+)'/);
+      if (m) savedInputs[m[1]] = el.value;
+    });
+
+    // Detectar si hay un input con foco dentro del board
+    const focused = document.activeElement;
+    const hasFocusedInput = focused && focused.classList.contains('approval-input');
+
     document.getElementById('board').innerHTML = renderBoard(await r.text());
     requestAnimationFrame(pruneVerMas);
     restoreLogPanels();
+
+    // Restaurar valores guardados
+    document.querySelectorAll('.approval-input').forEach(el => {
+      const bar = el.closest('.approval-bar');
+      if (!bar) return;
+      const btn = bar.querySelector('.approval-send');
+      if (!btn) return;
+      const m = btn.getAttribute('onclick')?.match(/'([^']+)'/);
+      if (m && savedInputs[m[1]] !== undefined) {
+        el.value = savedInputs[m[1]];
+        // Restaurar foco si estaba escribiendo
+        if (hasFocusedInput) el.focus();
+      }
+    });
+
     const t = new Date().toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
     document.getElementById('status-text').textContent = `actualizado ${t}`;
     document.getElementById('pulse').className = '';
