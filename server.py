@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Agent Board Server — sirve el board y despacha tareas a Claude vía tmux"""
+"""Agent Board Server — sirve el board y despacha tareas a agentes vía tmux"""
 
 import json, os, re, shlex, subprocess
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -12,6 +12,13 @@ WINDOWS_FILE = BOARD_DIR / "windows.json"
 CONFIG_FILE  = BOARD_DIR / "config.json"
 PORT         = int(os.environ.get("PORT", 8765))
 TMUX_SESSION = os.environ.get("IT_TMUX_SESSION", "it-agents")
+
+# Comando base por agente. El prompt se añade como último argumento (quoted).
+AGENT_CMDS = {
+    "claude": "claude --dangerously-skip-permissions",
+    "codex":  "codex",
+}
+DEFAULT_AGENT = "claude"
 
 MIME = {
     ".html": "text/html; charset=utf-8",
@@ -27,9 +34,13 @@ MIME = {
 
 def load_config() -> dict:
     try:
-        return json.loads(CONFIG_FILE.read_text())
+        cfg = json.loads(CONFIG_FILE.read_text())
     except Exception:
-        return {"default": "default", "workspaces": {"default": {"label": "Default", "path": str(Path.home())}}}
+        cfg = {"default": "default", "workspaces": {"default": {"label": "Default", "path": str(Path.home())}}}
+    # Siempre exponer la lista de agentes soportados al UI
+    cfg.setdefault("agents", list(AGENT_CMDS.keys()))
+    cfg.setdefault("default_agent", DEFAULT_AGENT)
+    return cfg
 
 
 def read_windows() -> dict:
@@ -128,6 +139,7 @@ class Handler(BaseHTTPRequestHandler):
 
         context      = (body.get("context")     or "").strip()
         workspace_id = (body.get("workspace")   or "").strip()
+        agent_id     = (body.get("agent")       or "").strip()
 
         if not context:
             return self.send_json(400, {"error": "context es requerido"})
@@ -140,7 +152,7 @@ class Handler(BaseHTTPRequestHandler):
             if len(words) > 8:
                 title += "…"
 
-        # Resolver workspace
+        # Resolver workspace y agente
         cfg = load_config()
         if not workspace_id or workspace_id not in cfg.get("workspaces", {}):
             workspace_id = cfg.get("default", "")
@@ -148,9 +160,15 @@ class Handler(BaseHTTPRequestHandler):
         ws_path  = ws_info.get("path", str(Path.home()))
         ws_label = ws_info.get("label", workspace_id)
 
+        # Prioridad: body > workspace config > default global
+        if not agent_id or agent_id not in AGENT_CMDS:
+            agent_id = ws_info.get("agent", "") or cfg.get("default_agent", DEFAULT_AGENT)
+        if agent_id not in AGENT_CMDS:
+            agent_id = DEFAULT_AGENT
+
         # 1. Registrar en bt
         result = subprocess.run(
-            [str(BT), "new", title, "--workspace", workspace_id],
+            [str(BT), "new", title, "--workspace", workspace_id, "--owner", agent_id],
             capture_output=True, text=True, cwd=ws_path,
             env={**os.environ, "IT_BOARD_DIR": str(BOARD_DIR)}
         )
@@ -189,12 +207,13 @@ class Handler(BaseHTTPRequestHandler):
         # Exporta IT_BOARD_DIR y asegura que ~/.local/bin esté en PATH
         # para que el agente use el bt central (no el de it/agents/).
         # Al terminar claude, la ventana tmux se cierra sola (via bt done o el fallback).
-        bin_dir = Path.home() / ".local" / "bin"
+        bin_dir   = Path.home() / ".local" / "bin"
+        agent_cmd = AGENT_CMDS[agent_id]
         cmd = (
             f"export IT_BOARD_DIR={shlex.quote(str(BOARD_DIR))} && "
             f"export PATH={shlex.quote(str(bin_dir))}:\"$PATH\" && "
             f"cd {shlex.quote(ws_path)} && "
-            f"claude --dangerously-skip-permissions {shlex.quote(prompt)}"
+            f"{agent_cmd} {shlex.quote(prompt)}"
         )
         subprocess.Popen(
             ["tmux", "new-window", "-t", f"{TMUX_SESSION}:", "-n", slug, cmd]

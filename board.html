@@ -671,6 +671,16 @@ async function loadConfig() {
       if (id === _config.default) opt.selected = true;
       sel.appendChild(opt);
     });
+
+    const asel = document.getElementById('dispatch-agent');
+    asel.innerHTML = '';
+    (_config.agents || ['claude']).forEach(id => {
+      const opt = document.createElement('option');
+      opt.value = id;
+      opt.textContent = id;
+      if (id === (_config.default_agent || 'claude')) opt.selected = true;
+      asel.appendChild(opt);
+    });
   } catch(e) {
     console.warn('No se pudo cargar config:', e.message);
   }
@@ -702,6 +712,7 @@ document.addEventListener('DOMContentLoaded', () => {
 async function dispatchTask() {
   const context   = document.getElementById('dispatch-context').value.trim();
   const workspace = document.getElementById('dispatch-workspace').value;
+  const agent     = document.getElementById('dispatch-agent').value;
   const msg       = document.getElementById('dispatch-msg');
   const btn       = document.getElementById('btn-dispatch');
 
@@ -720,7 +731,7 @@ async function dispatchTask() {
     const r = await fetch('/api/dispatch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ context, workspace }),
+      body: JSON.stringify({ context, workspace, agent }),
     });
     const data = await r.json();
     if (data.ok) {
@@ -750,9 +761,15 @@ async function dispatchTask() {
 <div id="modal-backdrop">
   <div id="modal">
     <h2>Nueva tarea para agente</h2>
-    <div class="field">
-      <label>Workspace</label>
-      <select id="dispatch-workspace"></select>
+    <div style="display:flex;gap:12px;">
+      <div class="field" style="flex:1">
+        <label>Workspace</label>
+        <select id="dispatch-workspace"></select>
+      </div>
+      <div class="field" style="flex:0 0 130px">
+        <label>Agente</label>
+        <select id="dispatch-agent"></select>
+      </div>
     </div>
     <div class="field">
       <label>¿Qué necesitas?</label>
