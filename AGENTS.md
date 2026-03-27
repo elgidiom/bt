@@ -28,24 +28,49 @@ El `<id>` puede ser parcial (ej: `bt log prueba "avanzando"` si el ID contiene "
 
 ```
 bt start <id>
-  → trabajar...
-  → bt log <id> "qué hiciste"   (cada acción relevante)
+  → bt log <id> "qué vas a hacer primero"
+  → hacer acción
+  → bt log <id> "resultado de la acción"
+  → bt log <id> "siguiente paso"
+  → ...
 bt done <id> "resultado en una línea"
 ```
 
+**Regla de oro: `bt log` antes Y después de cada acción relevante.** No acumules logs al final.
+
+Acciones que SIEMPRE requieren `bt log`:
+- Buscar en Linear, Notion, GWS, etc.
+- Encontrar (o no encontrar) un resultado
+- Ejecutar un comando o llamada a API
+- Detectar un error o bloqueo
+- Hacer una pregunta al usuario
+
 ---
 
-## Cuándo pedir aprobación
+## Cuándo pedir aprobación y cuándo bloquear
 
-Si vas a ejecutar una acción irreversible o visible externamente (enviar correo, modificar datos de producción, eliminar usuarios, etc.):
+### Bloquear por aprobación (acción irreversible o externa)
+
+Si vas a ejecutar una acción irreversible o visible externamente (enviar correo, modificar datos de producción, eliminar usuarios, cambiar permisos, etc.):
 
 1. Si hay un archivo que el usuario debe ver primero (PDF, borrador, reporte): depositarlo con `bt revisar` **antes** de bloquear.
-2. Bloquear la tarea: `bt block <id> "esperando aprobación: <descripción breve de la acción>"`.
+2. Bloquear: `bt block <id> "esperando aprobación: <descripción breve de la acción>"`.
 3. Mostrar en pantalla el detalle completo de lo que se va a hacer.
 4. Esperar respuesta del usuario antes de continuar.
 5. Cuando te aprueben: `bt start <id>` y ejecutar.
 
 **El texto del bloqueador debe empezar con "esperando aprobación:"** — el board lo detecta y muestra los botones ✓/✗ al usuario.
+
+### Bloquear por input del usuario (necesitas información para continuar)
+
+Si necesitas que el usuario aclare algo antes de continuar (qué ticket es, qué correo usar, cuál es el grupo, etc.):
+
+1. Loguear lo que encontraste hasta ahora: `bt log <id> "búsqueda realizada, resultado: ..."`.
+2. Bloquear: `bt block <id> "esperando input: <pregunta concreta>"`.
+3. Hacer la pregunta en pantalla.
+4. Cuando el usuario responda: `bt start <id>` y continuar.
+
+**Nunca dejes una pregunta al usuario sin bloquear la tarea.** Preguntar sin bloquear rompe el flujo del board.
 
 ---
 
@@ -85,7 +110,17 @@ bt done <id> "correo enviado a soporte@nubosoft.com, adjunto PDF 3 págs, smtp 2
 ## Reglas generales
 
 - Empezar siempre con `bt start` antes de hacer cualquier cosa.
-- Usar `bt log` después de cada acción relevante (no solo al final).
+- `bt log` antes Y después de cada acción relevante — nunca acumular logs al final.
+- Si necesitas input del usuario: `bt block <id> "esperando input: <pregunta>"` y luego preguntar.
+- Si la acción requiere aprobación: `bt block <id> "esperando aprobación: <acción>"` y detallar en pantalla.
 - Si te bloqueas por permisos o error técnico: `bt block <id> "bloqueado: <causa exacta>"`.
 - No dejar tareas en `in_progress` sin actividad — si no puedes continuar, bloquear con motivo.
 - Al terminar, leer las instrucciones del workspace (`CLAUDE.md`) para ver si hay pasos adicionales (handoffs, evidencia, etc.).
+
+### Resumen de prefijos para `bt block`
+
+| Prefijo | Cuándo usarlo |
+|---------|--------------|
+| `esperando aprobación:` | Acción irreversible o externa pendiente de ✓/✗ |
+| `esperando input:` | Necesito datos del usuario para continuar |
+| `bloqueado:` | Error técnico o de permisos que impide avanzar |
