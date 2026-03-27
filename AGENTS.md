@@ -1,4 +1,4 @@
-# IT Agent Board — Instrucciones globales
+# Agent Board — Instrucciones globales
 
 Este documento aplica a **todos los agentes** lanzados desde el board, sin importar el workspace.
 

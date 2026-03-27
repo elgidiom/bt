@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""IT Board Server — sirve el board y despacha tareas a Claude vía tmux"""
+"""Agent Board Server — sirve el board y despacha tareas a Claude vía tmux"""
 
 import json, os, re, shlex, subprocess
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -269,7 +269,7 @@ if __name__ == "__main__":
 
     HTTPServer.allow_reuse_address = True
     httpd = HTTPServer(("0.0.0.0", PORT), Handler)
-    print(f"IT Board Server")
+    print(f"Agent Board Server")
     print(f"  Board dir: {BOARD_DIR}")
     print(f"  Local:     http://localhost:{PORT}/board.html")
     print(f"  Red:       http://{ip}:{PORT}/board.html")

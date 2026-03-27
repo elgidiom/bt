@@ -6,7 +6,7 @@ BOARD_DIR="$(cd "$(dirname "$0")" && pwd)"
 BIN_DIR="$HOME/.local/bin"
 SHELL_RC=""
 
-echo "IT Board — instalando desde $BOARD_DIR"
+echo "Agent Board — instalando desde $BOARD_DIR"
 
 # 1. Crear directorios de datos
 mkdir -p "$BOARD_DIR/tasks" "$BOARD_DIR/para-revisar"
