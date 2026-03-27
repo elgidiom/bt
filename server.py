@@ -16,7 +16,7 @@ TMUX_SESSION = os.environ.get("IT_TMUX_SESSION", "bt-agents")
 # Comando base por agente. El prompt se añade como último argumento (quoted).
 AGENT_CMDS = {
     "claude": "claude --dangerously-skip-permissions",
-    "codex":  "codex --approval-mode full-auto",
+    "codex":  "codex exec --dangerously-bypass-approvals-and-sandbox",
 }
 DEFAULT_AGENT = "claude"
 
