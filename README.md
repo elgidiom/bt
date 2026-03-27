@@ -17,6 +17,8 @@ A minimal task board for running AI agents locally. Agents log progress, request
 | `claude` | `claude --dangerously-skip-permissions` |
 | `codex` | `codex exec --dangerously-bypass-approvals-and-sandbox` |
 
+> **Note:** Both agents are launched with full permissions — they will not ask for confirmation before executing commands, editing files, or calling external services. Only dispatch tasks you trust the agent to carry out autonomously.
+
 ## Requirements
 
 - Python 3.10+
