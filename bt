@@ -370,17 +370,51 @@ def cmd_status(args):
 
 def cmd_serve(args):
     """bt serve — levanta el servidor HTTP del board"""
+    import socket, signal
     server = BOARD_DIR / "server.py"
     if not server.exists():
         print(f"No se encontró server.py en {BOARD_DIR}")
         return
-    port = None
-    for i, a in enumerate(args):
-        if a in ("--port", "-p") and i+1 < len(args):
-            port = args[i+1]
-    env = {**os.environ, "IT_BOARD_DIR": str(BOARD_DIR)}
-    if port:
-        env["PORT"] = port
+    port = int(os.environ.get("PORT", 8765))
+    restart = False
+    i = 0
+    while i < len(args):
+        if args[i] in ("--port", "-p") and i+1 < len(args):
+            port = int(args[i+1]); i += 2
+        elif args[i] in ("--restart", "-r"):
+            restart = True; i += 1
+        else:
+            i += 1
+
+    # Detectar si ya hay algo corriendo en el puerto
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        in_use = s.connect_ex(("127.0.0.1", port)) == 0
+
+    if in_use:
+        if restart:
+            # Matar proceso que ocupa el puerto
+            try:
+                r = subprocess.run(
+                    ["lsof", "-ti", f":{port}"],
+                    capture_output=True, text=True
+                )
+                pids = r.stdout.strip().split()
+                for pid in pids:
+                    try:
+                        os.kill(int(pid), signal.SIGTERM)
+                    except Exception:
+                        pass
+                import time; time.sleep(1)
+                print(f"  Servidor anterior detenido.")
+            except Exception as e:
+                print(f"  No se pudo detener el servidor anterior: {e}")
+                return
+        else:
+            print(f"El servidor ya está corriendo en http://localhost:{port}/board.html")
+            print(f"  Usa 'bt serve --restart' para reiniciarlo.")
+            return
+
+    env = {**os.environ, "IT_BOARD_DIR": str(BOARD_DIR), "PORT": str(port)}
     try:
         subprocess.run([sys.executable, str(server)], env=env)
     except KeyboardInterrupt:
