@@ -582,8 +582,13 @@ function pruneVerMas() {
   });
 }
 
+function userIsTyping() {
+  const el = document.activeElement;
+  return el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+}
+
 refresh();
-setInterval(refresh, POLL);
+setInterval(() => { if (!userIsTyping()) refresh(); }, POLL);
 
 // Badge "Para revisar"
 async function checkRevisar() {
