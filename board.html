@@ -143,6 +143,38 @@
   .ping-btn:hover { border-color: #60a5fa; color: #60a5fa; }
   .ping-btn:disabled { opacity: .5; cursor: default; }
 
+  /* ── Intervenir (in_progress) ── */
+  .intervene-toggle {
+    margin-top: 8px; background: none; border: 1px solid #2d3748;
+    border-radius: 5px; padding: 3px 10px; color: #64748b;
+    font-size: 11px; cursor: pointer; transition: border-color .15s, color .15s;
+  }
+  .intervene-toggle:hover { border-color: #94a3b8; color: #94a3b8; }
+  .intervene-bar {
+    display: none; align-items: center; gap: 6px;
+    margin-top: 8px; padding-top: 8px;
+    border-top: 1px solid #2d3748;
+  }
+  .intervene-bar.open { display: flex; }
+  .intervene-input {
+    flex: 1; background: #0f1117; border: 1px solid #475569;
+    border-radius: 5px; padding: 5px 8px;
+    color: #e2e8f0; font-size: 12px; font-family: inherit; outline: none;
+  }
+  .intervene-input:focus { border-color: #60a5fa; }
+  .intervene-send {
+    padding: 5px 10px; border-radius: 5px; border: none; cursor: pointer;
+    font-size: 12px; font-weight: 600; background: #1e3a5f; color: #60a5fa;
+    transition: background .15s; white-space: nowrap;
+  }
+  .intervene-send:hover { background: #1e40af; }
+  .intervene-cancel-task {
+    padding: 5px 10px; border-radius: 5px; border: none; cursor: pointer;
+    font-size: 12px; font-weight: 600; background: #3b1212; color: #f87171;
+    transition: background .15s; white-space: nowrap;
+  }
+  .intervene-cancel-task:hover { background: #7f1d1d; }
+
   /* ── Approval inline ── */
   .approval-bar {
     display: flex; align-items: center; gap: 6px;
@@ -318,6 +350,25 @@ function isPlaceholder(row) {
   return row.every(c => c === '—' || c === '' || c.startsWith('(vacío)'));
 }
 
+function interveneBar(taskId) {
+  const bid = 'ib' + Math.random().toString(36).slice(2);
+  const iid = 'ii' + Math.random().toString(36).slice(2);
+  return `<button class="intervene-toggle" onclick="toggleIntervene('${bid}')">✎ intervenir</button>
+  <div class="intervene-bar" id="${bid}">
+    <input class="intervene-input" id="${iid}" placeholder="Redirigir o aclarar al agente…"
+           onkeydown="if(event.key==='Enter')sendIntervene('${taskId}','${iid}','${bid}')">
+    <button class="intervene-send" onclick="sendIntervene('${taskId}','${iid}','${bid}')">↩ Enviar</button>
+    <button class="intervene-cancel-task" onclick="cancelTask('${taskId}','${bid}')">✕ Cancelar tarea</button>
+  </div>`;
+}
+
+function toggleIntervene(barId) {
+  const bar = document.getElementById(barId);
+  if (!bar) return;
+  bar.classList.toggle('open');
+  if (bar.classList.contains('open')) bar.querySelector('.intervene-input')?.focus();
+}
+
 function needsApproval(blocker) {
   return blocker && blocker.trim().length > 0;
 }
@@ -365,6 +416,9 @@ function renderTable(table) {
       }
       if (showApproval && hdr === 'bloqueador') {
         content += approvalBar(taskId, blocker);
+      }
+      if (isActive && (hdr === 'actividad')) {
+        content += `<div style="margin-top:4px">${interveneBar(taskId)}</div>`;
       }
       if (showLog && (hdr === 'actualizado' || hdr === 'fecha')) {
         content += `<br><button class="log-btn" data-log-btn="${taskId}" onclick="toggleLog('${taskId}')">▸ logs</button>`;
@@ -423,6 +477,7 @@ function renderCards(table) {
       ${activity ? `<div class="card-activity">${activity}</div>` : ''}
       ${extra && !activity ? (() => { const rid = `r${Math.random().toString(36).slice(2)}`; return `<div class="card-result clamped" id="${rid}">${extra}</div><button class="ver-mas" onclick="toggleVerMas(this,'${rid}')">ver más</button>`; })() : ''}
       ${showApproval ? approvalBar(taskId, blocker) : ''}
+      ${isActiveCard ? interveneBar(taskId) : ''}
       ${taskId ? `<div class="card-log"><button class="log-btn" data-log-btn="${taskId}" onclick="toggleLog('${taskId}')">▸ logs</button><pre id="log-${taskId}" class="log-content" style="display:none">cargando…</pre></div>` : ''}
     </div>`;
   });
@@ -656,6 +711,48 @@ async function pingAgent(taskId, btn) {
   } catch {
     btn.textContent = '!';
     setTimeout(() => { btn.textContent = '?'; btn.disabled = false; }, 2000);
+  }
+}
+
+async function sendIntervene(taskId, inputId, barId) {
+  const input = document.getElementById(inputId);
+  const text  = input ? input.value.trim() : '';
+  if (!text) return;
+  input.disabled = true;
+  try {
+    const r = await fetch('/api/respond', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_id: taskId, response: text }),
+    });
+    const d = await r.json();
+    const bar = document.getElementById(barId);
+    if (d.ok) {
+      if (bar) bar.innerHTML = `<span style="font-size:12px;color:#60a5fa;">↩ Enviado — el agente recibirá el mensaje.</span>`;
+      setTimeout(refresh, 2000);
+    } else {
+      if (input) { input.disabled = false; input.style.borderColor = '#f87171'; }
+    }
+  } catch(e) {
+    if (input) { input.disabled = false; }
+  }
+}
+
+async function cancelTask(taskId, barId) {
+  if (!confirm(`¿Cancelar la tarea ${taskId}?`)) return;
+  const bar = document.getElementById(barId);
+  if (bar) bar.innerHTML = `<span style="font-size:12px;color:#94a3b8;">cancelando…</span>`;
+  try {
+    const r = await fetch('/api/cancel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_id: taskId }),
+    });
+    const d = await r.json();
+    if (d.ok) setTimeout(refresh, 800);
+    else if (bar) bar.innerHTML = `<span style="font-size:12px;color:#f87171;">Error: ${d.error}</span>`;
+  } catch(e) {
+    if (bar) bar.innerHTML = `<span style="font-size:12px;color:#f87171;">${e.message}</span>`;
   }
 }
 

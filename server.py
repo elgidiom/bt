@@ -127,6 +127,8 @@ class Handler(BaseHTTPRequestHandler):
             self._dispatch()
         elif self.path == "/api/respond":
             self._respond()
+        elif self.path == "/api/cancel":
+            self._cancel()
         else:
             self.send_response(404); self.end_headers()
 
@@ -225,6 +227,36 @@ class Handler(BaseHTTPRequestHandler):
         write_windows(windows)
 
         self.send_json(200, {"ok": True, "task_id": task_id, "workspace": ws_label})
+
+    def _cancel(self):
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            body = json.loads(self.rfile.read(length))
+        except Exception:
+            return self.send_json(400, {"error": "JSON inválido"})
+
+        task_id = (body.get("task_id") or "").strip()
+        if not task_id:
+            return self.send_json(400, {"error": "task_id requerido"})
+
+        # Matar ventana tmux si existe
+        windows = read_windows()
+        slug = windows.get(task_id) or task_id.replace("task-", "")[-22:]
+        window_idx = find_tmux_window(slug)
+        if window_idx is not None:
+            subprocess.run(
+                ["tmux", "kill-window", "-t", f"{TMUX_SESSION}:{window_idx}"],
+                capture_output=True
+            )
+
+        # Marcar tarea como cancelada vía bt
+        subprocess.run(
+            [str(BT), "done", task_id, "cancelada por el usuario"],
+            capture_output=True, text=True,
+            env={**os.environ, "IT_BOARD_DIR": str(BOARD_DIR)}
+        )
+
+        self.send_json(200, {"ok": True, "task_id": task_id})
 
     def _task_progress(self, task_id: str):
         if not re.match(r'^task-[\w-]+$', task_id):
