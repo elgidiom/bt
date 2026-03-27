@@ -167,6 +167,24 @@
   }
   .approval-cancel:hover { background: #7f1d1d; }
 
+  /* ── Log panel ── */
+  .log-btn {
+    background: none; border: 1px solid #334155; border-radius: 4px;
+    padding: 2px 7px; font-size: 11px; cursor: pointer;
+    color: #64748b; font-family: inherit; margin-top: 6px; display: inline-block;
+    transition: border-color .15s, color .15s;
+  }
+  .log-btn:hover { border-color: #60a5fa; color: #60a5fa; }
+  .log-row td { padding: 0 12px 10px 28px !important; }
+  .log-content {
+    background: #0a0d14; border: 1px solid #1e2535; border-radius: 6px;
+    padding: 10px 12px; font-size: 11px; font-family: monospace;
+    color: #94a3b8; white-space: pre-wrap; line-height: 1.6;
+    max-height: 200px; overflow-y: auto;
+  }
+  .card-log { margin-top: 8px; }
+  .card-log .log-content { max-height: 160px; }
+
   .cards { display: none; }
 
   /* ── MOBILE: cards ── */
@@ -281,6 +299,8 @@
 
 <script>
 const POLL = 5000;
+const logPanels = new Set();
+const logCache  = {};
 
 function badge(text) {
   const key = text.trim().toLowerCase().replace(/\s+/g,'_');
@@ -299,14 +319,17 @@ function isPlaceholder(row) {
 }
 
 function needsApproval(blocker) {
-  return blocker && blocker.toLowerCase().includes('esperando aprobaci');
+  return blocker && blocker.trim().length > 0;
 }
 
-function approvalBar(taskId) {
+function approvalBar(taskId, blocker) {
   const uid = 'ap' + Math.random().toString(36).slice(2);
   const sid = 'as' + Math.random().toString(36).slice(2);
+  const isApproval = blocker && blocker.toLowerCase().includes('esperando aprobaci');
+  const defaultVal = isApproval ? 'adelante' : '';
+  const placeholder = isApproval ? 'respuesta…' : 'instrucción para el agente…';
   return `<div class="approval-bar">
-    <input class="approval-input" id="${uid}" value="adelante" placeholder="respuesta…">
+    <input class="approval-input" id="${uid}" value="${defaultVal}" placeholder="${placeholder}">
     <button class="approval-send" onclick="sendApproval('${taskId}','${uid}','${sid}',true)">✓ Enviar</button>
     <button class="approval-cancel" onclick="sendApproval('${taskId}','${uid}','${sid}',false)">✗ No</button>
     <span id="${sid}" style="font-size:11px;color:#64748b;"></span>
@@ -331,6 +354,7 @@ function renderTable(table) {
     const status   = row[idx['estado'] ?? idx['status']] || '';
     const isActive = status.toLowerCase().replace(/\s/g,'_') === 'in_progress';
     const showApproval = needsApproval(blocker);
+    const showLog = !!taskId;
 
     h += `<tr>`;
     row.forEach((cell, i) => {
@@ -340,11 +364,17 @@ function renderTable(table) {
         content += ` <button class="ping-btn" onclick="pingAgent('${taskId}',this)" title="Pedir actualización de estado">?</button>`;
       }
       if (showApproval && hdr === 'bloqueador') {
-        content += approvalBar(taskId);
+        content += approvalBar(taskId, blocker);
+      }
+      if (showLog && (hdr === 'actualizado' || hdr === 'fecha')) {
+        content += `<br><button class="log-btn" data-log-btn="${taskId}" onclick="toggleLog('${taskId}')">▸ logs</button>`;
       }
       h += `<td>${content}</td>`;
     });
     h += `</tr>`;
+    if (showLog) {
+      h += `<tr class="log-row" id="logrow-${taskId}" style="display:none"><td colspan="${table.headers.length}"><pre id="log-${taskId}" class="log-content">cargando…</pre></td></tr>`;
+    }
   });
   return h + `</tbody></table></div>`;
 }
@@ -392,7 +422,8 @@ function renderCards(table) {
       </div>
       ${activity ? `<div class="card-activity">${activity}</div>` : ''}
       ${extra && !activity ? (() => { const rid = `r${Math.random().toString(36).slice(2)}`; return `<div class="card-result clamped" id="${rid}">${extra}</div><button class="ver-mas" onclick="toggleVerMas(this,'${rid}')">ver más</button>`; })() : ''}
-      ${showApproval ? approvalBar(taskId) : ''}
+      ${showApproval ? approvalBar(taskId, blocker) : ''}
+      ${taskId ? `<div class="card-log"><button class="log-btn" data-log-btn="${taskId}" onclick="toggleLog('${taskId}')">▸ logs</button><pre id="log-${taskId}" class="log-content" style="display:none">cargando…</pre></div>` : ''}
     </div>`;
   });
   return h + `</div>`;
@@ -442,12 +473,53 @@ function renderBoard(md) {
   return html;
 }
 
+async function fetchTaskLog(taskId) {
+  try {
+    const r = await fetch(`/api/task/${taskId}/progress?t=${Date.now()}`);
+    if (!r.ok) return;
+    const d = await r.json();
+    logCache[taskId] = d.progress || '(sin logs aún)';
+    const el = document.getElementById('log-' + taskId);
+    if (el) el.textContent = logCache[taskId];
+  } catch {}
+}
+
+function toggleLog(taskId) {
+  if (logPanels.has(taskId)) {
+    logPanels.delete(taskId);
+  } else {
+    logPanels.add(taskId);
+    fetchTaskLog(taskId);
+  }
+  // tabla
+  const row = document.getElementById('logrow-' + taskId);
+  if (row) row.style.display = logPanels.has(taskId) ? '' : 'none';
+  // card
+  const panel = document.getElementById('log-' + taskId);
+  if (panel) panel.style.display = logPanels.has(taskId) ? 'block' : 'none';
+  // botones
+  document.querySelectorAll(`[data-log-btn="${taskId}"]`).forEach(btn => {
+    btn.textContent = logPanels.has(taskId) ? '▾ logs' : '▸ logs';
+  });
+}
+
+function restoreLogPanels() {
+  for (const taskId of logPanels) {
+    const row = document.getElementById('logrow-' + taskId);
+    if (row) row.style.display = '';
+    const panel = document.getElementById('log-' + taskId);
+    if (panel) { panel.style.display = 'block'; panel.textContent = logCache[taskId] || 'cargando…'; }
+    document.querySelectorAll(`[data-log-btn="${taskId}"]`).forEach(btn => btn.textContent = '▾ logs');
+  }
+}
+
 async function refresh() {
   try {
     const r = await fetch('board.md?t=' + Date.now());
     if (!r.ok) throw new Error(r.status);
     document.getElementById('board').innerHTML = renderBoard(await r.text());
     requestAnimationFrame(pruneVerMas);
+    restoreLogPanels();
     const t = new Date().toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
     document.getElementById('status-text').textContent = `actualizado ${t}`;
     document.getElementById('pulse').className = '';
@@ -456,6 +528,11 @@ async function refresh() {
     document.getElementById('pulse').className = 'error';
   }
 }
+
+// Refresco rápido de paneles de logs abiertos
+setInterval(() => {
+  for (const taskId of logPanels) fetchTaskLog(taskId);
+}, 2000);
 
 function toggleVerMas(btn, id) {
   const el = document.getElementById(id);

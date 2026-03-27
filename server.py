@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """IT Board Server — sirve el board y despacha tareas a Claude vía tmux"""
 
-import json, os, shlex, subprocess
+import json, os, re, shlex, subprocess
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import urlparse
@@ -79,6 +79,10 @@ class Handler(BaseHTTPRequestHandler):
         # API endpoints
         if path == "api/config":
             return self.send_json(200, load_config())
+
+        if path.startswith("api/task/") and path.endswith("/progress"):
+            task_id = path[len("api/task/"):-len("/progress")]
+            return self._task_progress(task_id)
 
         # Archivos estáticos desde BOARD_DIR
         if not path or path == "board.html":
@@ -203,6 +207,27 @@ class Handler(BaseHTTPRequestHandler):
 
         self.send_json(200, {"ok": True, "task_id": task_id, "workspace": ws_label})
 
+    def _task_progress(self, task_id: str):
+        if not re.match(r'^task-[\w-]+$', task_id):
+            return self.send_json(400, {"error": "ID inválido"})
+        task_file = BOARD_DIR / "tasks" / f"{task_id}.md"
+        if not task_file.exists():
+            return self.send_json(404, {"error": "tarea no encontrada"})
+        content = task_file.read_text()
+        lines = content.splitlines()
+        in_section = False
+        result_lines = []
+        for line in lines:
+            if line.strip() == "## Progreso":
+                in_section = True
+                continue
+            if in_section and line.startswith("## "):
+                break
+            if in_section:
+                result_lines.append(line)
+        progress = "\n".join(result_lines).strip()
+        self.send_json(200, {"task_id": task_id, "progress": progress})
+
     def _respond(self):
         length = int(self.headers.get("Content-Length", 0))
         try:
@@ -242,6 +267,7 @@ if __name__ == "__main__":
     (BOARD_DIR / "tasks").mkdir(parents=True, exist_ok=True)
     (BOARD_DIR / "para-revisar").mkdir(parents=True, exist_ok=True)
 
+    HTTPServer.allow_reuse_address = True
     httpd = HTTPServer(("0.0.0.0", PORT), Handler)
     print(f"IT Board Server")
     print(f"  Board dir: {BOARD_DIR}")
