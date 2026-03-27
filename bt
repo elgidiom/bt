@@ -283,6 +283,22 @@ def cmd_done(args):
     BOARD_FILE.write_text("\n".join(lines) + "\n")
     print(f"✓ {tid} → done")
 
+    # Limpiar para-revisar vinculados a esta tarea
+    try:
+        if MANIFEST_FILE.exists():
+            manifest = json.loads(MANIFEST_FILE.read_text())
+            linked = [i for i in manifest.get("items", []) if i.get("task_id") == tid]
+            if linked:
+                for item in linked:
+                    f = REVISAR_DIR / item["file"]
+                    if f.exists():
+                        f.unlink()
+                manifest["items"] = [i for i in manifest["items"] if i.get("task_id") != tid]
+                MANIFEST_FILE.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
+                print(f"  → {len(linked)} item(s) de para-revisar eliminados")
+    except Exception:
+        pass
+
     # Cerrar ventana tmux si está trackeada
     try:
         windows = read_windows()
@@ -298,10 +314,18 @@ def cmd_done(args):
 
 def cmd_revisar(args):
     if len(args) < 2:
-        return print('Uso: bt revisar <ruta-o-nombre> "titulo" ["nota"]')
+        return print('Uso: bt revisar <ruta-o-nombre> "titulo" ["nota"] [--task <id>]')
     src = Path(args[0])
     title = args[1]
-    note = args[2] if len(args) > 2 else ""
+    note = ""
+    task_id = None
+    i = 2
+    while i < len(args):
+        if args[i] == "--task" and i+1 < len(args):
+            task_id = args[i+1]; i += 2
+        else:
+            if not note: note = args[i]
+            i += 1
     dest_name = src.name
     dest = REVISAR_DIR / dest_name
     if src.resolve() != dest.resolve():
@@ -312,13 +336,16 @@ def cmd_revisar(args):
         try: manifest = json.loads(MANIFEST_FILE.read_text())
         except Exception: pass
     manifest["items"] = [i for i in manifest.get("items", []) if i.get("file") != dest_name]
-    manifest["items"].insert(0, {
+    entry = {
         "file": dest_name,
         "title": title,
         "date": today(),
         "note": note,
         "reviewed": False,
-    })
+    }
+    if task_id:
+        entry["task_id"] = task_id
+    manifest["items"].insert(0, entry)
     MANIFEST_FILE.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
     print(f"✓ {dest_name} → para-revisar/")
 
@@ -341,6 +368,24 @@ def cmd_status(args):
         print(f"  {sec}: {n}")
     print(f"  Board: {BOARD_FILE}")
 
+def cmd_serve(args):
+    """bt serve — levanta el servidor HTTP del board"""
+    server = BOARD_DIR / "server.py"
+    if not server.exists():
+        print(f"No se encontró server.py en {BOARD_DIR}")
+        return
+    port = None
+    for i, a in enumerate(args):
+        if a in ("--port", "-p") and i+1 < len(args):
+            port = args[i+1]
+    env = {**os.environ, "IT_BOARD_DIR": str(BOARD_DIR)}
+    if port:
+        env["PORT"] = port
+    try:
+        subprocess.run([sys.executable, str(server)], env=env)
+    except KeyboardInterrupt:
+        pass
+
 # ── main ──────────────────────────────────────────────────────────────────────
 
 CMDS = {
@@ -351,6 +396,7 @@ CMDS = {
     "done":    cmd_done,
     "revisar": cmd_revisar,
     "status":  cmd_status,
+    "serve":   cmd_serve,
 }
 
 def main():
@@ -364,6 +410,7 @@ def main():
         print("  bt done <id> \"resultado\"")
         print("  bt revisar <archivo> \"titulo\" [\"nota\"]")
         print("  bt status")
+        print("  bt serve [--port N]")
         print(f"\nBoard: {BOARD_FILE}")
         return
     CMDS[sys.argv[1]](sys.argv[2:])

@@ -17,7 +17,7 @@ bt start <id>                    # marcar tarea como in_progress (hazlo primero)
 bt log <id> "mensaje"            # registrar progreso (úsalo frecuentemente)
 bt block <id> "razon"            # bloquear tarea esperando aprobación o input
 bt done <id> "resultado"         # cerrar tarea con resultado en una línea
-bt revisar <archivo> "titulo" "nota"  # depositar archivo en bandeja de revisión
+bt revisar <archivo> "titulo" "nota" --task <id>  # depositar archivo en bandeja de revisión
 bt ls                            # ver board completo
 bt show <id>                     # ver archivo de tarea
 ```
@@ -54,10 +54,12 @@ Si vas a ejecutar una acción irreversible o visible externamente (enviar correo
 Úsalo cuando generes un archivo que el usuario debe aprobar antes de que continues:
 
 ```bash
-bt revisar /ruta/al/archivo.pdf "Borrador correo Nubosoft" "revisar tono y adjunto"
+bt revisar /ruta/al/archivo.pdf "Borrador correo Nubosoft" "revisar tono y adjunto" --task <id>
 ```
 
 Esto copia el archivo a `~/.it-board/para-revisar/`, lo registra en el manifest y lo hace visible en `board.html`.
+
+**Siempre pasá `--task <id>`** — cuando la tarea se cierre con `bt done`, todos sus items de para-revisar se eliminan automáticamente.
 
 **Cuándo usarlo:**
 - Generaste un PDF, doc o borrador que necesita aprobación.
