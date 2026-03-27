@@ -349,6 +349,75 @@ def cmd_revisar(args):
     MANIFEST_FILE.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
     print(f"✓ {dest_name} → para-revisar/")
 
+def cmd_ls(args):
+    """bt ls [status] — lista tareas; sin argumento muestra activas+bloqueadas"""
+    if not TASKS_DIR.exists():
+        print("No hay tareas."); return
+
+    # Aliases de estado
+    STATUS_ALIASES = {
+        "active": ["pending", "in_progress"],
+        "activas": ["pending", "in_progress"],
+        "pending": ["pending"],
+        "in_progress": ["in_progress"],
+        "blocked": ["blocked"],
+        "bloqueadas": ["blocked"],
+        "done": ["done"],
+        "completadas": ["done"],
+        "all": ["pending", "in_progress", "blocked", "done"],
+        "todas": ["pending", "in_progress", "blocked", "done"],
+    }
+    filter_arg = args[0].lower() if args else None
+    if filter_arg and filter_arg not in STATUS_ALIASES:
+        print(f"Estado desconocido: {filter_arg}")
+        print(f"Opciones: {', '.join(STATUS_ALIASES)}")
+        return
+    filter_statuses = STATUS_ALIASES[filter_arg] if filter_arg else ["pending", "in_progress", "blocked"]
+
+    STATUS_LABEL = {
+        "pending":     "pending  ",
+        "in_progress": "activa   ",
+        "blocked":     "bloqueada",
+        "done":        "done     ",
+    }
+    COLOR = {
+        "pending":     "\033[33m",   # amarillo
+        "in_progress": "\033[32m",   # verde
+        "blocked":     "\033[31m",   # rojo
+        "done":        "\033[90m",   # gris
+    }
+    RESET = "\033[0m"
+
+    tasks = []
+    for f in sorted(TASKS_DIR.glob("task-*.md")):
+        content = f.read_text()
+        status = "pending"
+        owner  = "—"
+        date   = "—"
+        title  = f.stem
+        for line in content.splitlines():
+            if line.startswith("Status: "):   status = line[8:].strip()
+            elif line.startswith("Owner: "):  owner  = line[7:].strip()
+            elif line.startswith("Date: "):   date   = line[6:].strip()
+            elif line.startswith("# ") and " — " in line:
+                title = line.split(" — ", 1)[1].strip()
+        if status in filter_statuses:
+            tasks.append((date, f.stem, title, status, owner))
+
+    if not tasks:
+        label = filter_arg or "activas/bloqueadas"
+        print(f"No hay tareas {label}."); return
+
+    tasks.sort(key=lambda x: x[0], reverse=True)
+    label = filter_arg or "activas + bloqueadas"
+    print(f"\nTareas ({label}):\n")
+    for date, tid, title, status, owner in tasks:
+        col   = COLOR.get(status, "")
+        slabel = STATUS_LABEL.get(status, status.ljust(9))
+        short = tid.replace("task-", "")
+        print(f"  {col}{slabel}{RESET}  {short}  {owner:<8}  {title[:60]}")
+    print()
+
 def cmd_status(args):
     """bt status — muestra resumen del board"""
     if not BOARD_FILE.exists():
@@ -429,6 +498,7 @@ CMDS = {
     "block":   cmd_block,
     "done":    cmd_done,
     "revisar": cmd_revisar,
+    "ls":      cmd_ls,
     "status":  cmd_status,
     "serve":   cmd_serve,
 }
@@ -443,6 +513,7 @@ def main():
         print("  bt block <id> \"razon\"")
         print("  bt done <id> \"resultado\"")
         print("  bt revisar <archivo> \"titulo\" [\"nota\"]")
+        print("  bt ls [pending|in_progress|blocked|done|all]")
         print("  bt status")
         print("  bt serve [--port N]")
         print(f"\nBoard: {BOARD_FILE}")
