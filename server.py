@@ -11,12 +11,12 @@ BT           = BOARD_DIR / "bt"
 WINDOWS_FILE = BOARD_DIR / "windows.json"
 CONFIG_FILE  = BOARD_DIR / "config.json"
 PORT         = int(os.environ.get("PORT", 8765))
-TMUX_SESSION = os.environ.get("IT_TMUX_SESSION", "it-agents")
+TMUX_SESSION = os.environ.get("IT_TMUX_SESSION", "bt-agents")
 
 # Comando base por agente. El prompt se añade como último argumento (quoted).
 AGENT_CMDS = {
     "claude": "claude --dangerously-skip-permissions",
-    "codex":  "codex",
+    "codex":  "codex --approval-mode full-auto",
 }
 DEFAULT_AGENT = "claude"
 

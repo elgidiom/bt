@@ -16,7 +16,7 @@ TASKS_DIR     = BOARD_DIR / "tasks"
 REVISAR_DIR   = BOARD_DIR / "para-revisar"
 MANIFEST_FILE = REVISAR_DIR / "manifest.json"
 WINDOWS_FILE  = BOARD_DIR / "windows.json"
-TMUX_SESSION  = os.environ.get("IT_TMUX_SESSION", "it-agents")
+TMUX_SESSION  = os.environ.get("IT_TMUX_SESSION", "bt-agents")
 
 # ── utils ─────────────────────────────────────────────────────────────────────
 
