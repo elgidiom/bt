@@ -1,6 +1,6 @@
-# Agent Board
+# bt — board tool for agents
 
-A minimal task board for Claude agents. Agents log progress, request approvals, and deposit files for review — all visible in a local web UI.
+A minimal task board for running Claude agents locally. Agents log progress, request approvals, and deposit files for review — all visible in a web UI served from your machine.
 
 ## How it works
 
