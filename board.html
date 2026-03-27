@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IT Agent Board</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: #0f1117;
+    color: #e2e8f0;
+    min-height: 100vh;
+    padding: 24px 20px;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 28px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid #1e2535;
+  }
+
+  header h1 { font-size: 18px; font-weight: 600; color: #f1f5f9; }
+
+  #status { display: flex; align-items: center; gap: 8px; font-size: 12px; color: #64748b; }
+
+  #pulse {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #22c55e; animation: blink 2s infinite;
+    flex-shrink: 0;
+  }
+  #pulse.error { background: #ef4444; animation: none; }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+  /* Section */
+  .section { margin-bottom: 28px; }
+
+  .section-header {
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 12px;
+  }
+  .section-title {
+    font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 1px; color: #94a3b8;
+  }
+  .section-count {
+    background: #1e2535; color: #64748b;
+    font-size: 11px; font-weight: 700;
+    padding: 1px 7px; border-radius: 10px;
+  }
+
+  /* Badges */
+  .badge {
+    display: inline-block; padding: 3px 10px;
+    border-radius: 20px; font-size: 11px; font-weight: 700; text-transform: lowercase;
+  }
+  .badge-in_progress { background:#1e3a5f; color:#60a5fa; }
+  .badge-blocked     { background:#3b1212; color:#f87171; }
+  .badge-pending     { background:#1e2535; color:#94a3b8; }
+  .badge-review      { background:#2d2012; color:#fb923c; }
+  .badge-done        { background:#0f2d1f; color:#4ade80; }
+
+  .empty { padding:14px; color:#334155; font-size:13px; font-style:italic; }
+
+  .divider { border:none; border-top:1px solid #1e2535; margin:28px 0; }
+
+  /* ── DESKTOP: tabla ── */
+  .table-wrap { overflow-x: auto; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th {
+    text-align:left; padding:8px 12px;
+    color:#475569; font-size:11px; font-weight:600;
+    text-transform:uppercase; letter-spacing:.6px;
+    border-bottom:1px solid #1e2535;
+  }
+  td { padding:11px 12px; border-bottom:1px solid #141824; color:#cbd5e1; vertical-align:top; }
+  tr:last-child td { border-bottom:none; }
+  tr:hover td { background:#141824; }
+  td:first-child { color:#64748b; font-size:11px; font-family:monospace; max-width:180px; word-break:break-all; }
+
+  /* ── FAB + Modal ── */
+  #fab {
+    position: fixed; bottom: 24px; right: 20px; z-index: 100;
+    width: 48px; height: 48px; border-radius: 50%;
+    background: #3b82f6; color: #fff;
+    font-size: 26px; line-height: 1; font-weight: 300;
+    border: none; cursor: pointer; box-shadow: 0 4px 14px rgba(0,0,0,.4);
+    display: flex; align-items: center; justify-content: center;
+    transition: background .15s;
+  }
+  #fab:hover { background: #2563eb; }
+
+  #modal-backdrop {
+    display: none; position: fixed; inset: 0; z-index: 200;
+    background: rgba(0,0,0,.65); align-items: center; justify-content: center;
+  }
+  #modal-backdrop.open { display: flex; }
+
+  #modal {
+    background: #1a2033; border: 1px solid #1e2535; border-radius: 12px;
+    padding: 24px; width: min(480px, calc(100vw - 32px));
+    box-shadow: 0 20px 60px rgba(0,0,0,.6);
+  }
+  #modal h2 { font-size: 15px; font-weight: 600; color: #f1f5f9; margin-bottom: 18px; }
+
+  .field { margin-bottom: 14px; }
+  .field label { display: block; font-size: 11px; font-weight: 600; color: #64748b;
+                 text-transform: uppercase; letter-spacing: .6px; margin-bottom: 6px; }
+  .field input, .field textarea, .field select {
+    width: 100%; background: #0f1117; border: 1px solid #1e2535;
+    border-radius: 7px; padding: 10px 12px; color: #e2e8f0;
+    font-size: 13px; font-family: inherit; resize: vertical;
+    outline: none; transition: border-color .15s;
+  }
+  .field select { cursor: pointer; }
+  .field input:focus, .field textarea:focus, .field select:focus { border-color: #3b82f6; }
+
+  .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
+  .btn { padding: 8px 18px; border-radius: 7px; font-size: 13px; font-weight: 600;
+         border: none; cursor: pointer; transition: background .15s; }
+  .btn-cancel { background: #1e2535; color: #94a3b8; }
+  .btn-cancel:hover { background: #263047; }
+  .btn-dispatch { background: #3b82f6; color: #fff; }
+  .btn-dispatch:hover { background: #2563eb; }
+  .btn-dispatch:disabled { background: #1e3a5f; color: #475569; cursor: default; }
+
+  #dispatch-msg { font-size: 12px; margin-top: 10px; min-height: 18px; }
+  #dispatch-msg.ok  { color: #4ade80; }
+  #dispatch-msg.err { color: #f87171; }
+
+  /* ── Ping button ── */
+  .ping-btn {
+    background: none; border: 1px solid #334155; border-radius: 50%;
+    width: 20px; height: 20px; font-size: 11px; cursor: pointer;
+    color: #64748b; line-height: 1; padding: 0;
+    transition: border-color .15s, color .15s;
+    flex-shrink: 0;
+  }
+  .ping-btn:hover { border-color: #60a5fa; color: #60a5fa; }
+  .ping-btn:disabled { opacity: .5; cursor: default; }
+
+  /* ── Approval inline ── */
+  .approval-bar {
+    display: flex; align-items: center; gap: 6px;
+    margin-top: 8px; padding-top: 8px;
+    border-top: 1px solid #2d3748;
+  }
+  .approval-input {
+    flex: 1; background: #0f1117; border: 1px solid #3b82f6;
+    border-radius: 5px; padding: 5px 8px;
+    color: #e2e8f0; font-size: 12px; font-family: inherit; outline: none;
+  }
+  .approval-send {
+    padding: 5px 12px; border-radius: 5px; border: none; cursor: pointer;
+    font-size: 12px; font-weight: 600; background: #22c55e; color: #fff;
+    transition: background .15s;
+  }
+  .approval-send:hover { background: #16a34a; }
+  .approval-cancel {
+    padding: 5px 10px; border-radius: 5px; border: none; cursor: pointer;
+    font-size: 12px; font-weight: 600; background: #3b1212; color: #f87171;
+    transition: background .15s;
+  }
+  .approval-cancel:hover { background: #7f1d1d; }
+
+  .cards { display: none; }
+
+  /* ── MOBILE: cards ── */
+  @media (max-width: 640px) {
+    body { padding: 16px 14px; }
+    header h1 { font-size: 16px; }
+    #status-text { display: none; }
+
+    .table-wrap { display: none; }
+    .cards { display: flex; flex-direction: column; gap: 10px; }
+
+    .card {
+      background: #141824;
+      border: 1px solid #1e2535;
+      border-radius: 10px;
+      padding: 14px;
+    }
+
+    .card-top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+
+    .card-title {
+      font-size: 14px;
+      font-weight: 500;
+      color: #f1f5f9;
+      line-height: 1.4;
+    }
+
+    .card-title.clamped {
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .ver-mas {
+      display: inline-block;
+      margin-top: 4px;
+      font-size: 11px;
+      color: #3b82f6;
+      background: none;
+      border: none;
+      padding: 0;
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .ver-mas:hover { text-decoration: underline; }
+
+    .card-meta {
+      display: flex;
+      gap: 10px;
+      font-size: 12px;
+      color: #64748b;
+      flex-wrap: wrap;
+    }
+
+    .card-meta span::before { content: attr(data-label) ': '; color: #334155; }
+
+    .card-result {
+      margin-top: 8px;
+      font-size: 12px;
+      color: #94a3b8;
+      line-height: 1.5;
+      padding-top: 8px;
+      border-top: 1px solid #1e2535;
+    }
+
+    .card-result.clamped {
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .card-activity {
+      margin-top: 8px;
+      font-size: 12px;
+      color: #60a5fa;
+      line-height: 1.4;
+      display: flex;
+      align-items: flex-start;
+      gap: 6px;
+    }
+
+    .card-activity::before {
+      content: '↳';
+      opacity: 0.5;
+      flex-shrink: 0;
+    }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>IT Agent Board</h1>
+  <div style="display:flex;align-items:center;gap:14px;">
+    <a id="revisar-link" href="para-revisar/" style="display:none;font-size:12px;font-weight:600;padding:4px 10px;border-radius:6px;background:#1e3a5f;color:#60a5fa;text-decoration:none;">📄 Para revisar <span id="revisar-count"></span></a>
+    <div id="status">
+      <div id="pulse"></div>
+      <span id="status-text">cargando…</span>
+    </div>
+  </div>
+</header>
+
+<div id="board"></div>
+
+<script>
+const POLL = 5000;
+
+function badge(text) {
+  const key = text.trim().toLowerCase().replace(/\s+/g,'_');
+  return `<span class="badge badge-${key}">${text.trim()}</span>`;
+}
+
+function parseTable(lines) {
+  if (lines.length < 3) return null;
+  const headers  = lines[0].split('|').slice(1,-1).map(h => h.trim());
+  const dataRows = lines.slice(2).map(r => r.split('|').slice(1,-1).map(c => c.trim()));
+  return { headers, dataRows };
+}
+
+function isPlaceholder(row) {
+  return row.every(c => c === '—' || c === '' || c.startsWith('(vacío)'));
+}
+
+function needsApproval(blocker) {
+  return blocker && blocker.toLowerCase().includes('esperando aprobaci');
+}
+
+function approvalBar(taskId) {
+  const uid = 'ap' + Math.random().toString(36).slice(2);
+  const sid = 'as' + Math.random().toString(36).slice(2);
+  return `<div class="approval-bar">
+    <input class="approval-input" id="${uid}" value="adelante" placeholder="respuesta…">
+    <button class="approval-send" onclick="sendApproval('${taskId}','${uid}','${sid}',true)">✓ Enviar</button>
+    <button class="approval-cancel" onclick="sendApproval('${taskId}','${uid}','${sid}',false)">✗ No</button>
+    <span id="${sid}" style="font-size:11px;color:#64748b;"></span>
+  </div>`;
+}
+
+// Desktop table
+function renderTable(table) {
+  if (!table) return `<div class="empty">Sin tareas</div>`;
+  const rows = table.dataRows.filter(r => !isPlaceholder(r));
+  if (!rows.length) return `<div class="empty">Sin tareas</div>`;
+
+  let h = `<div class="table-wrap"><table><thead><tr>`;
+  table.headers.forEach(th => h += `<th>${th}</th>`);
+  h += `</tr></thead><tbody>`;
+
+  rows.forEach(row => {
+    const idx = {};
+    table.headers.forEach((hd,i) => idx[hd.toLowerCase()] = i);
+    const blocker  = row[idx['bloqueador']] || '';
+    const taskId   = row[0] || '';
+    const status   = row[idx['estado'] ?? idx['status']] || '';
+    const isActive = status.toLowerCase().replace(/\s/g,'_') === 'in_progress';
+    const showApproval = needsApproval(blocker);
+
+    h += `<tr>`;
+    row.forEach((cell, i) => {
+      const hdr = (table.headers[i]||'').toLowerCase();
+      let content = hdr==='estado'||hdr==='status' ? badge(cell) : cell;
+      if ((hdr==='estado'||hdr==='status') && isActive) {
+        content += ` <button class="ping-btn" onclick="pingAgent('${taskId}',this)" title="Pedir actualización de estado">?</button>`;
+      }
+      if (showApproval && hdr === 'bloqueador') {
+        content += approvalBar(taskId);
+      }
+      h += `<td>${content}</td>`;
+    });
+    h += `</tr>`;
+  });
+  return h + `</tbody></table></div>`;
+}
+
+// Mobile cards
+function renderCards(table) {
+  if (!table) return `<div class="cards"><div class="empty">Sin tareas</div></div>`;
+  const rows = table.dataRows.filter(r => !isPlaceholder(r));
+  if (!rows.length) return `<div class="cards"><div class="empty">Sin tareas</div></div>`;
+
+  const idx = {};
+  table.headers.forEach((h,i) => idx[h.toLowerCase()] = i);
+
+  const get = (row, ...keys) => {
+    for (const k of keys) if (idx[k] !== undefined) return row[idx[k]] || '';
+    return '';
+  };
+
+  let h = `<div class="cards">`;
+  rows.forEach(row => {
+    const title    = get(row, 'tarea');
+    const owner    = get(row, 'owner');
+    const status   = get(row, 'estado', 'status');
+    const date     = get(row, 'actualizado', 'fecha');
+    const extra    = get(row, 'resultado breve', 'bloqueador');
+    const activity = get(row, 'actividad');
+    const blocker  = get(row, 'bloqueador');
+    const taskId   = row[0] || '';
+    const showApproval   = needsApproval(blocker);
+    const isActiveCard   = (status||'').toLowerCase().replace(/\s/g,'_') === 'in_progress';
+
+    const tid = `t${Math.random().toString(36).slice(2)}`;
+    h += `<div class="card">
+      <div class="card-top">
+        <div class="card-title clamped" id="${tid}">${title}</div>
+        <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
+          ${status ? badge(status) : ''}
+          ${isActiveCard ? `<button class="ping-btn" onclick="pingAgent('${taskId}',this)" title="Pedir actualización">?</button>` : ''}
+        </div>
+      </div>
+      <button class="ver-mas" onclick="toggleVerMas(this,'${tid}')">ver más</button>
+      <div class="card-meta">
+        ${owner ? `<span data-label="owner">${owner}</span>` : ''}
+        ${date  ? `<span data-label="fecha">${date}</span>`  : ''}
+      </div>
+      ${activity ? `<div class="card-activity">${activity}</div>` : ''}
+      ${extra && !activity ? (() => { const rid = `r${Math.random().toString(36).slice(2)}`; return `<div class="card-result clamped" id="${rid}">${extra}</div><button class="ver-mas" onclick="toggleVerMas(this,'${rid}')">ver más</button>`; })() : ''}
+      ${showApproval ? approvalBar(taskId) : ''}
+    </div>`;
+  });
+  return h + `</div>`;
+}
+
+function parseSections(md) {
+  const lines = md.split('\n');
+  const sections = [];
+  let cur = null;
+  for (const l of lines) {
+    const m = l.match(/^## (.+)/);
+    if (m) { if (cur) sections.push(cur); cur = { title: m[1].trim(), lines: [] }; }
+    else if (cur) cur.lines.push(l);
+  }
+  if (cur) sections.push(cur);
+  return sections;
+}
+
+function renderBoard(md) {
+  const sections = parseSections(md);
+  const order = ['Activas','En revisión','Bloqueadas','Completadas'];
+  const shown = new Set();
+  let html = '';
+
+  order.forEach(name => {
+    const sec = sections.find(s => !shown.has(s.title) && s.title.toLowerCase().includes(name.toLowerCase().split(' ')[0]));
+    if (!sec) return;
+    shown.add(sec.title);
+
+    const tlines = sec.lines.filter(l => l.trim().startsWith('|'));
+    const table  = tlines.length >= 3 ? parseTable(tlines) : null;
+    const count  = table ? table.dataRows.filter(r => !isPlaceholder(r)).length : 0;
+
+    html += `<div class="section">
+      <div class="section-header">
+        <span class="section-title">${sec.title}</span>
+        <span class="section-count">${count}</span>
+      </div>
+      ${renderTable(table)}
+      ${renderCards(table)}
+    </div>`;
+
+    if (sec.title.toLowerCase().includes('bloqueada') || sec.title.toLowerCase().includes('revisión')) {
+      html += `<hr class="divider">`;
+    }
+  });
+  return html;
+}
+
+async function refresh() {
+  try {
+    const r = await fetch('board.md?t=' + Date.now());
+    if (!r.ok) throw new Error(r.status);
+    document.getElementById('board').innerHTML = renderBoard(await r.text());
+    requestAnimationFrame(pruneVerMas);
+    const t = new Date().toLocaleTimeString('es',{hour:'2-digit',minute:'2-digit',second:'2-digit'});
+    document.getElementById('status-text').textContent = `actualizado ${t}`;
+    document.getElementById('pulse').className = '';
+  } catch(e) {
+    document.getElementById('status-text').textContent = `error: ${e.message}`;
+    document.getElementById('pulse').className = 'error';
+  }
+}
+
+function toggleVerMas(btn, id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  const expanded = el.classList.toggle('clamped');
+  btn.textContent = expanded ? 'ver más' : 'ver menos';
+}
+
+function pruneVerMas() {
+  document.querySelectorAll('.card-title.clamped, .card-result.clamped').forEach(el => {
+    const anchor = el.classList.contains('card-title') ? el.closest('.card-top') : el;
+    const btn = anchor ? anchor.nextElementSibling : null;
+    if (!btn || !btn.classList.contains('ver-mas')) return;
+    btn.style.display = el.scrollHeight > el.clientHeight ? '' : 'none';
+  });
+}
+
+refresh();
+setInterval(refresh, POLL);
+
+// Badge "Para revisar"
+async function checkRevisar() {
+  try {
+    const r = await fetch('para-revisar/manifest.json?t=' + Date.now());
+    if (!r.ok) return;
+    const data = await r.json();
+    const pending = (data.items || []).filter(i => !i.reviewed).length;
+    const link = document.getElementById('revisar-link');
+    const count = document.getElementById('revisar-count');
+    if (pending > 0) {
+      count.textContent = `(${pending})`;
+      link.style.display = '';
+    } else {
+      link.style.display = 'none';
+    }
+  } catch {}
+}
+checkRevisar();
+setInterval(checkRevisar, 15000);
+
+// ── Approval ────────────────────────────────────────────────────────────────
+
+async function sendApproval(taskId, inputId, statusId, approve) {
+  const input  = document.getElementById(inputId);
+  const status = document.getElementById(statusId);
+  const text   = approve ? (input ? input.value.trim() || 'adelante' : 'adelante') : 'no';
+  if (status) { status.textContent = 'enviando…'; status.style.color = '#94a3b8'; }
+  try {
+    const r = await fetch('/api/respond', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_id: taskId, response: text }),
+    });
+    const d = await r.json();
+    if (d.ok) {
+      const bar = document.getElementById(statusId)?.closest('.approval-bar');
+      if (bar) {
+        bar.innerHTML = `<span style="font-size:12px;color:#4ade80;">✓ Respuesta enviada — esperando al agente…</span>`;
+      }
+      setTimeout(refresh, 3000);
+    } else {
+      if (status) { status.textContent = `Error: ${d.error}`; status.style.color = '#f87171'; }
+    }
+  } catch(e) {
+    if (status) { status.textContent = `Error: ${e.message}`; status.style.color = '#f87171'; }
+  }
+}
+
+async function pingAgent(taskId, btn) {
+  btn.disabled = true;
+  btn.textContent = '…';
+  try {
+    const r = await fetch('/api/respond', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        task_id: taskId,
+        response: '¿qué está pasando con la tarea? escribe un bt log con el estado actual en una línea'
+      }),
+    });
+    const d = await r.json();
+    btn.textContent = d.ok ? '✓' : '!';
+    setTimeout(() => { btn.textContent = '?'; btn.disabled = false; }, 2000);
+  } catch {
+    btn.textContent = '!';
+    setTimeout(() => { btn.textContent = '?'; btn.disabled = false; }, 2000);
+  }
+}
+
+// ── Config & Dispatch modal ──────────────────────────────────────────────────
+
+let _config = null;
+
+async function loadConfig() {
+  try {
+    const r = await fetch('/api/config');
+    _config = await r.json();
+    const sel = document.getElementById('dispatch-workspace');
+    sel.innerHTML = '';
+    Object.entries(_config.workspaces || {}).forEach(([id, ws]) => {
+      const opt = document.createElement('option');
+      opt.value = id;
+      opt.textContent = ws.label || id;
+      if (id === _config.default) opt.selected = true;
+      sel.appendChild(opt);
+    });
+  } catch(e) {
+    console.warn('No se pudo cargar config:', e.message);
+  }
+}
+
+function openModal() {
+  document.getElementById('modal-backdrop').classList.add('open');
+  document.getElementById('dispatch-context').focus();
+}
+function closeModal() {
+  document.getElementById('modal-backdrop').classList.remove('open');
+  document.getElementById('dispatch-context').value = '';
+  document.getElementById('dispatch-msg').textContent = '';
+  document.getElementById('dispatch-msg').className = '';
+  document.getElementById('btn-dispatch').disabled = false;
+  document.getElementById('btn-dispatch').textContent = 'Lanzar agente';
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  loadConfig();
+  document.getElementById('modal-backdrop').addEventListener('click', function(e) {
+    if (e.target === this) closeModal();
+  });
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') closeModal();
+  });
+});
+
+async function dispatchTask() {
+  const context   = document.getElementById('dispatch-context').value.trim();
+  const workspace = document.getElementById('dispatch-workspace').value;
+  const msg       = document.getElementById('dispatch-msg');
+  const btn       = document.getElementById('btn-dispatch');
+
+  if (!context) {
+    msg.textContent = 'Describe qué necesitas.';
+    msg.className = 'err';
+    return;
+  }
+
+  btn.disabled = true;
+  btn.textContent = 'Lanzando…';
+  msg.textContent = '';
+  msg.className = '';
+
+  try {
+    const r = await fetch('/api/dispatch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ context, workspace }),
+    });
+    const data = await r.json();
+    if (data.ok) {
+      msg.textContent = `✓ ${data.task_id} → ${data.workspace}`;
+      msg.className = 'ok';
+      setTimeout(closeModal, 2000);
+      setTimeout(refresh, 600);
+    } else {
+      msg.textContent = `Error: ${data.error || 'desconocido'}`;
+      msg.className = 'err';
+      btn.disabled = false;
+      btn.textContent = 'Lanzar agente';
+    }
+  } catch (e) {
+    msg.textContent = `Error de red: ${e.message}`;
+    msg.className = 'err';
+    btn.disabled = false;
+    btn.textContent = 'Lanzar agente';
+  }
+}
+</script>
+
+<!-- FAB -->
+<button id="fab" onclick="openModal()" title="Nueva tarea">+</button>
+
+<!-- Modal -->
+<div id="modal-backdrop">
+  <div id="modal">
+    <h2>Nueva tarea para agente</h2>
+    <div class="field">
+      <label>Workspace</label>
+      <select id="dispatch-workspace"></select>
+    </div>
+    <div class="field">
+      <label>¿Qué necesitas?</label>
+      <textarea id="dispatch-context" rows="4"
+                placeholder="ej: revisar inbox de juan.burgos y archivar todo lo que no sea accionable"
+                onkeydown="if(event.key==='Enter'&&(event.metaKey||event.ctrlKey))dispatchTask()"></textarea>
+    </div>
+    <div id="dispatch-msg"></div>
+    <div class="modal-actions">
+      <button class="btn btn-cancel" onclick="closeModal()">Cancelar</button>
+      <button class="btn btn-dispatch" id="btn-dispatch" onclick="dispatchTask()">Lanzar agente</button>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

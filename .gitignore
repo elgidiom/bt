@@ -1,0 +1,6 @@
+board.md
+windows.json
+tasks/
+para-revisar/
+*.pyc
+__pycache__/

@@ -1,0 +1,372 @@
+#!/usr/bin/env python3
+"""bt — Board Tool para agentes IT (versión central)
+
+El directorio de datos se determina así (en orden de prioridad):
+  1. Variable de entorno IT_BOARD_DIR
+  2. ~/.it-board/  (default)
+"""
+
+import os, re, json, subprocess, sys
+from datetime import datetime
+from pathlib import Path
+
+BOARD_DIR     = Path(os.environ.get("IT_BOARD_DIR", Path.home() / ".it-board"))
+BOARD_FILE    = BOARD_DIR / "board.md"
+TASKS_DIR     = BOARD_DIR / "tasks"
+REVISAR_DIR   = BOARD_DIR / "para-revisar"
+MANIFEST_FILE = REVISAR_DIR / "manifest.json"
+WINDOWS_FILE  = BOARD_DIR / "windows.json"
+TMUX_SESSION  = os.environ.get("IT_TMUX_SESSION", "it-agents")
+
+# ── utils ─────────────────────────────────────────────────────────────────────
+
+def today(): return datetime.now().strftime("%Y-%m-%d")
+def now():   return datetime.now().strftime("%Y-%m-%d %H:%M")
+
+def slugify(text):
+    t = text.lower()
+    for src, dst in [("áàäâ","a"),("éèëê","e"),("íìïî","i"),("óòöô","o"),("úùüû","u"),("ñ","n")]:
+        for c in src: t = t.replace(c, dst)
+    t = re.sub(r'[^a-z0-9\s-]', '', t)
+    t = re.sub(r'\s+', '-', t.strip())
+    return t[:40].rstrip('-')
+
+def make_id(title):
+    return f"task-{datetime.now().strftime('%Y%m%d')}-{slugify(title)}"
+
+def resolve_id(partial):
+    matches = [f.stem for f in TASKS_DIR.glob("task-*.md") if partial in f.stem]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        exact = [m for m in matches if m == partial]
+        if exact: return exact[0]
+        print(f"Ambiguo — posibles matches:\n  " + "\n  ".join(matches))
+        return None
+    if partial.startswith("task-"):
+        return partial
+    print(f"No encontrado: {partial}")
+    return None
+
+def read_windows():
+    try:
+        if WINDOWS_FILE.exists():
+            return json.loads(WINDOWS_FILE.read_text())
+    except Exception:
+        pass
+    return {}
+
+def write_windows(data):
+    WINDOWS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+
+# ── board: manipulación de tablas markdown ────────────────────────────────────
+
+S_ACTIVAS     = "Activas"
+S_BLOQUEADAS  = "En revisión / Bloqueadas"
+S_COMPLETADAS = "Completadas"
+
+def trow(cols):
+    return "| " + " | ".join(str(c) for c in cols) + " |"
+
+def parse_row(line):
+    return [c.strip() for c in line.split("|")[1:-1]]
+
+def is_placeholder(line):
+    return all(c in ("—","") or c.startswith("(vacío)") for c in parse_row(line))
+
+def find_section(lines, name):
+    for i, l in enumerate(lines):
+        if re.match(r'^## ', l) and name.split()[0].lower() in l.lower():
+            return i
+    return None
+
+def section_bounds(lines, sec_idx):
+    nxt = next((i for i in range(sec_idx+1, len(lines)) if re.match(r'^## ', lines[i])), len(lines))
+    header = sep = first = None
+    for i in range(sec_idx+1, nxt):
+        if lines[i].strip().startswith('|'):
+            if   header is None: header = i
+            elif sep    is None: sep    = i
+            elif first  is None: first  = i; break
+    return header, sep, first, nxt
+
+def add_row(lines, section, cols):
+    si = find_section(lines, section)
+    if si is None: return lines
+    header, sep, first, end = section_bounds(lines, si)
+    if header is None: return lines
+    drop = {i for i in range(si+1, end) if lines[i].strip().startswith('|') and is_placeholder(lines[i])}
+    lines = [l for i,l in enumerate(lines) if i not in drop]
+    si = find_section(lines, section)
+    header, sep, first, end = section_bounds(lines, si)
+    at = first if first is not None else (sep+1 if sep is not None else end)
+    lines.insert(at, trow(cols))
+    return lines
+
+def remove_row(lines, tid):
+    for i, l in enumerate(lines):
+        if l.strip().startswith('|') and tid in l:
+            cols = parse_row(l)
+            sec  = next((re.match(r'^## (.+)', lines[j]).group(1).strip()
+                         for j in range(i,-1,-1) if re.match(r'^## ', lines[j])), None)
+            nl = lines[:i] + lines[i+1:]
+            nl = restore_placeholder(nl, sec)
+            return nl, cols, sec
+    return lines, None, None
+
+def restore_placeholder(lines, sec_name):
+    if not sec_name: return lines
+    si = find_section(lines, sec_name)
+    if si is None: return lines
+    header, sep, first, end = section_bounds(lines, si)
+    if header is None: return lines
+    data = [l for l in lines[(sep+1 if sep else header+1):end]
+            if l.strip().startswith('|') and not is_placeholder(l)]
+    if not data:
+        hcols = parse_row(lines[header])
+        lines.insert((sep+1 if sep is not None else header+1), trow(["—"]*len(hcols)))
+    return lines
+
+def update_row_cols(lines, tid, updates):
+    for i, l in enumerate(lines):
+        if not l.strip().startswith('|') or tid not in l: continue
+        header_idx = None
+        for j in range(i-1, -1, -1):
+            if lines[j].strip().startswith('|') and re.match(r'^\|[-| ]+\|$', lines[j].strip()):
+                header_idx = j - 1
+                break
+        headers = parse_row(lines[header_idx]) if header_idx is not None and header_idx >= 0 else []
+        cols = parse_row(l)
+        for key, val in updates.items():
+            if isinstance(key, int):
+                if key < len(cols): cols[key] = val
+            else:
+                idx = next((k for k,h in enumerate(headers) if key in h.lower()), None)
+                if idx is not None and idx < len(cols): cols[idx] = val
+        lines[i] = trow(cols)
+        break
+    return lines
+
+def update_status_in_board(lines, tid, status):
+    return update_row_cols(lines, tid, {"estado": status, "actualizado": today()})
+
+# ── task files ────────────────────────────────────────────────────────────────
+
+def create_task_file(tid, title, owner="claude", priority="medium", workspace=""):
+    TASKS_DIR.mkdir(parents=True, exist_ok=True)
+    path = TASKS_DIR / f"{tid}.md"
+    ws_line = f"Workspace: {workspace}\n" if workspace else ""
+    path.write_text(f"""# {tid} — {title}
+
+Owner: {owner}
+Status: pending
+Priority: {priority}
+Date: {today()}
+{ws_line}
+## Qué se pide
+{title}
+
+## Cómo hacerlo
+1. Paso 1
+2. Paso 2
+3. Validar
+
+## Progreso
+- {now()} — tarea creada
+
+## Bloqueadores
+ninguno
+
+## Resultado
+(completar al cerrar)
+""")
+    return path
+
+def task_set_field(tid, field, value):
+    path = TASKS_DIR / f"{tid}.md"
+    if not path.exists(): return
+    content = re.sub(rf'^{field}: .+$', f'{field}: {value}', path.read_text(), flags=re.MULTILINE)
+    path.write_text(content)
+
+def task_append_progress(tid, message):
+    path = TASKS_DIR / f"{tid}.md"
+    if not path.exists(): print(f"No encontrado: {tid}"); return
+    lines = path.read_text().splitlines()
+    entry, in_p, at = f"- {now()} — {message}", False, None
+    for i, l in enumerate(lines):
+        if l.startswith("## Progreso"): in_p = True
+        elif in_p and l.startswith("## "): at = i; break
+    if at: lines.insert(at, entry)
+    else:  lines.append(entry)
+    path.write_text("\n".join(lines) + "\n")
+
+def task_set_result(tid, result):
+    path = TASKS_DIR / f"{tid}.md"
+    if not path.exists(): return
+    content = re.sub(r'## Resultado\n.*', f'## Resultado\n{result}',
+                     path.read_text(), flags=re.DOTALL)
+    path.write_text(content.rstrip() + '\n')
+
+def task_set_blocker(tid, reason):
+    path = TASKS_DIR / f"{tid}.md"
+    if not path.exists(): return
+    content = path.read_text().replace("## Bloqueadores\nninguno",
+                                       f"## Bloqueadores\n{reason}")
+    path.write_text(content)
+
+# ── comandos ──────────────────────────────────────────────────────────────────
+
+def cmd_new(args):
+    if not args: return print("Uso: bt new \"titulo\" [--owner nombre] [--priority media] [--workspace ws]")
+    title, owner, priority, workspace = args[0], "claude", "medium", ""
+    i = 1
+    while i < len(args):
+        if args[i] == "--owner"     and i+1 < len(args): owner     = args[i+1]; i += 2
+        elif args[i] == "--priority" and i+1 < len(args): priority = args[i+1]; i += 2
+        elif args[i] == "--workspace" and i+1 < len(args): workspace = args[i+1]; i += 2
+        else: i += 1
+
+    BOARD_DIR.mkdir(parents=True, exist_ok=True)
+    tid = make_id(title)
+    create_task_file(tid, title, owner, priority, workspace)
+    lines = BOARD_FILE.read_text().splitlines()
+    lines = add_row(lines, S_ACTIVAS, [tid, title, owner, "pending", "", today()])
+    BOARD_FILE.write_text("\n".join(lines) + "\n")
+    print(f"✓ creada: {tid}")
+
+def cmd_start(args):
+    if not args: return print("Uso: bt start <id>")
+    if not (tid := resolve_id(args[0])): return
+    task_set_field(tid, "Status", "in_progress")
+    lines = update_row_cols(BOARD_FILE.read_text().splitlines(), tid,
+                            {"estado": "in_progress", "actividad": "iniciando...", "actualizado": today()})
+    BOARD_FILE.write_text("\n".join(lines) + "\n")
+    print(f"✓ {tid} → in_progress")
+
+def cmd_log(args):
+    if len(args) < 2: return print("Uso: bt log <id> \"mensaje\"")
+    if not (tid := resolve_id(args[0])): return
+    msg = " ".join(args[1:])
+    task_append_progress(tid, msg)
+    lines = update_row_cols(BOARD_FILE.read_text().splitlines(), tid,
+                            {"actividad": msg[:200], "actualizado": today()})
+    BOARD_FILE.write_text("\n".join(lines) + "\n")
+    print(f"✓ {tid}")
+
+def cmd_block(args):
+    if len(args) < 2: return print("Uso: bt block <id> \"razon\"")
+    if not (tid := resolve_id(args[0])): return
+    reason = " ".join(args[1:])
+    task_set_field(tid, "Status", "blocked")
+    task_set_blocker(tid, reason)
+    lines = BOARD_FILE.read_text().splitlines()
+    lines, old, _ = remove_row(lines, tid)
+    if old:
+        lines = add_row(lines, S_BLOQUEADAS, [tid, old[1] if len(old)>1 else tid,
+                                              old[2] if len(old)>2 else "—", reason, today()])
+    BOARD_FILE.write_text("\n".join(lines) + "\n")
+    print(f"✓ {tid} → bloqueada: {reason}")
+
+def cmd_done(args):
+    if len(args) < 2: return print("Uso: bt done <id> \"resultado\"")
+    if not (tid := resolve_id(args[0])): return
+    result = " ".join(args[1:])
+    task_set_field(tid, "Status", "done")
+    task_append_progress(tid, f"completada — {result}")
+    task_set_result(tid, result)
+    lines = BOARD_FILE.read_text().splitlines()
+    lines, old, _ = remove_row(lines, tid)
+    if old:
+        lines = add_row(lines, S_COMPLETADAS, [tid, old[1] if len(old)>1 else tid,
+                                               old[2] if len(old)>2 else "—",
+                                               result[:200], today()])
+    BOARD_FILE.write_text("\n".join(lines) + "\n")
+    print(f"✓ {tid} → done")
+
+    # Cerrar ventana tmux si está trackeada
+    try:
+        windows = read_windows()
+        slug = windows.pop(tid, None)
+        if slug:
+            subprocess.run(
+                ["tmux", "kill-window", "-t", f"{TMUX_SESSION}:{slug}"],
+                capture_output=True
+            )
+            write_windows(windows)
+    except Exception:
+        pass
+
+def cmd_revisar(args):
+    if len(args) < 2:
+        return print('Uso: bt revisar <ruta-o-nombre> "titulo" ["nota"]')
+    src = Path(args[0])
+    title = args[1]
+    note = args[2] if len(args) > 2 else ""
+    dest_name = src.name
+    dest = REVISAR_DIR / dest_name
+    if src.resolve() != dest.resolve():
+        import shutil
+        shutil.copy2(src, dest)
+    manifest = {"items": []}
+    if MANIFEST_FILE.exists():
+        try: manifest = json.loads(MANIFEST_FILE.read_text())
+        except Exception: pass
+    manifest["items"] = [i for i in manifest.get("items", []) if i.get("file") != dest_name]
+    manifest["items"].insert(0, {
+        "file": dest_name,
+        "title": title,
+        "date": today(),
+        "note": note,
+        "reviewed": False,
+    })
+    MANIFEST_FILE.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
+    print(f"✓ {dest_name} → para-revisar/")
+
+def cmd_status(args):
+    """bt status — muestra resumen del board"""
+    if not BOARD_FILE.exists():
+        print("Board no encontrado. Ejecuta install.sh primero.")
+        return
+    lines = BOARD_FILE.read_text().splitlines()
+    in_sec = None
+    counts = {}
+    for l in lines:
+        m = re.match(r'^## (.+)', l)
+        if m: in_sec = m.group(1).strip(); counts[in_sec] = 0
+        elif in_sec and l.strip().startswith('|') and not re.match(r'^\|[-| ]+\|$', l.strip()):
+            row = [c.strip() for c in l.split('|')[1:-1]]
+            if row and not all(c in ('—','') for c in row):
+                counts[in_sec] = counts.get(in_sec, 0) + 1
+    for sec, n in counts.items():
+        print(f"  {sec}: {n}")
+    print(f"  Board: {BOARD_FILE}")
+
+# ── main ──────────────────────────────────────────────────────────────────────
+
+CMDS = {
+    "new":     cmd_new,
+    "start":   cmd_start,
+    "log":     cmd_log,
+    "block":   cmd_block,
+    "done":    cmd_done,
+    "revisar": cmd_revisar,
+    "status":  cmd_status,
+}
+
+def main():
+    if len(sys.argv) < 2 or sys.argv[1] not in CMDS:
+        print("bt — Board Tool\n")
+        print("Comandos:")
+        print("  bt new \"titulo\" [--owner X] [--workspace X]")
+        print("  bt start <id>")
+        print("  bt log <id> \"mensaje\"")
+        print("  bt block <id> \"razon\"")
+        print("  bt done <id> \"resultado\"")
+        print("  bt revisar <archivo> \"titulo\" [\"nota\"]")
+        print("  bt status")
+        print(f"\nBoard: {BOARD_FILE}")
+        return
+    CMDS[sys.argv[1]](sys.argv[2:])
+
+if __name__ == "__main__":
+    main()

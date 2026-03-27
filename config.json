@@ -1,0 +1,17 @@
+{
+  "default": "it",
+  "workspaces": {
+    "it": {
+      "label": "IT Principal",
+      "path": "/home/gidiom/Alegra/it"
+    },
+    "legal": {
+      "label": "Legal (Lexa)",
+      "path": "/home/gidiom/Alegra/lexa-alegra-legal-system"
+    },
+    "alma": {
+      "label": "Alma",
+      "path": "/home/gidiom/Alegra/it/alegra-it-alma"
+    }
+  }
+}
