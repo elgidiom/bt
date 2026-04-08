@@ -367,25 +367,32 @@ def _finalize_task(tid, result):
     BOARD_FILE.write_text("\n".join(lines) + "\n")
     print(f"✓ {tid} → done")
 
-    # Limpiar para-revisar vinculados a esta tarea
+    # Archivar para-revisar vinculados a esta tarea
     try:
         if MANIFEST_FILE.exists():
+            import shutil
+            archive_dir = REVISAR_DIR / "archivados"
             manifest = json.loads(MANIFEST_FILE.read_text())
             linked = [
                 i for i in manifest.get("items", [])
                 if normalize_task_id(i.get("task_id")) == tid
             ]
             if linked:
+                archive_dir.mkdir(exist_ok=True)
                 for item in linked:
                     f = REVISAR_DIR / item["file"]
                     if f.exists():
-                        f.unlink()
+                        dest = archive_dir / f.name
+                        # Evitar colisiones con archivos ya archivados
+                        if dest.exists():
+                            dest = archive_dir / f"{f.stem}-{tid[:20]}{f.suffix}"
+                        shutil.move(str(f), str(dest))
                 manifest["items"] = [
                     i for i in manifest["items"]
                     if normalize_task_id(i.get("task_id")) != tid
                 ]
                 MANIFEST_FILE.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
-                print(f"  → {len(linked)} item(s) de para-revisar eliminados")
+                print(f"  → {len(linked)} item(s) archivados en para-revisar/archivados/")
     except Exception:
         pass
 
