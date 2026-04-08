@@ -3,12 +3,12 @@
   "default_agent": "claude",
   "workspaces": {
     "main": {
-      "label": "My Project",
-      "path": "/home/user/projects/my-project"
+      "label": "Main Project",
+      "path": "../my-project"
     },
     "other": {
       "label": "Other Project",
-      "path": "/home/user/projects/other-project",
+      "path": "../other-project",
       "agent": "codex"
     }
   }

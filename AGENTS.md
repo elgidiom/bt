@@ -6,7 +6,7 @@ Este documento aplica a **todos los agentes** lanzados desde el board, sin impor
 
 ## Board Tool (`bt`)
 
-`bt` es el CLI central para gestionar tareas. Está en `~/.local/bin/bt` y escribe al board en `~/.it-board/`.
+`bt` es el CLI central para gestionar tareas. Vive en este repo y puede exponerse opcionalmente en `PATH` con `install.sh --link`. Escribe al board en el directorio resuelto por `IT_BOARD_DIR` o, por defecto, en el directorio real del script.
 
 **NUNCA** editar `board.md` a mano. **NUNCA** usar TaskCreate de Claude. **SIEMPRE** `bt`.
 
@@ -16,11 +16,13 @@ Este documento aplica a **todos los agentes** lanzados desde el board, sin impor
 bt start <id>                    # marcar tarea como in_progress (hazlo primero)
 bt log <id> "mensaje"            # registrar progreso (úsalo frecuentemente)
 bt block <id> "razon"            # bloquear tarea esperando aprobación o input
-bt done <id> "resultado"         # cerrar tarea con resultado en una línea
+bt done <id> "resultado"         # solicitar cierre — NO cierra sola, espera aprobación del usuario
 bt revisar <archivo> "titulo" "nota" --task <id>  # depositar archivo en bandeja de revisión
 bt ls                            # ver board completo
-bt show <id>                     # ver archivo de tarea
+bt show <id>                     # ver archivo de tarea (incluye input original y todos los logs)
 ```
+
+> `bt finalize` lo ejecuta el board automáticamente cuando el usuario aprueba (✓). Los agentes no deben llamarlo.
 
 El `<id>` puede ser parcial (ej: `bt log prueba "avanzando"` si el ID contiene "prueba").
 
@@ -33,10 +35,26 @@ bt start <id>
   → bt log <id> "resultado de la acción"
   → bt log <id> "siguiente paso"
   → ...
-bt done <id> "resultado en una línea"
+bt done <id> "resultado en una línea"   # → bloquea esperando aprobación del usuario
+# usuario aprueba (✓) en el board
+bt start <id>
+bt finalize <id>                        # → cierra definitivamente
 ```
 
 **Regla de oro: `bt log` antes Y después de cada acción relevante.** No acumules logs al final.
+
+### Retomar tareas huérfanas
+
+Si recibes una tarea que no empezaste tú (o lleva tiempo bloqueada), antes de hacer nada:
+
+```bash
+bt show <id>    # leer input original (sección "Qué se pide") + todos los logs de progreso
+bt ls           # ver estado general del board
+```
+
+La sección **"Qué se pide"** contiene el input completo del usuario tal como se registró al crear la tarea.
+El **Progreso** tiene el historial completo de acciones tomadas.
+Con eso tenés todo el contexto para retomar sin preguntar.
 
 Acciones que SIEMPRE requieren `bt log`:
 - Buscar en Linear, Notion, GWS, etc.
@@ -82,7 +100,7 @@ Si necesitas que el usuario aclare algo antes de continuar (qué ticket es, qué
 bt revisar /ruta/al/archivo.pdf "Borrador correo Nubosoft" "revisar tono y adjunto" --task <id>
 ```
 
-Esto copia el archivo a `~/.it-board/para-revisar/`, lo registra en el manifest y lo hace visible en `board.html`.
+Esto copia el archivo a `para-revisar/` dentro del board activo, lo registra en el manifest y lo hace visible en `board.html`.
 
 **Siempre pasá `--task <id>`** — cuando la tarea se cierre con `bt done`, todos sus items de para-revisar se eliminan automáticamente.
 
@@ -98,11 +116,18 @@ Esto copia el archivo a `~/.it-board/para-revisar/`, lo registra en el manifest 
 
 ## Al terminar una tarea
 
-`bt done` cierra la tarea, la mueve a Completadas en el board y cierra la terminal automáticamente.
+`bt done` **no cierra automáticamente**. Bloquea la tarea con "esperando aprobación: cerrar" para que el usuario revise antes de archivar.
+
+### Flujo completo de cierre:
+
+1. **Agente:** `bt done <id> "resultado en una línea"` → tarea pasa a Bloqueadas esperando ✓
+2. **Usuario:** aprueba (✓) en el board → el board cierra la tarea automáticamente
+3. Si el usuario quiere pedir algo extra antes de cerrar, usa ✗ Rechazar con un mensaje → la tarea vuelve a `in_progress` y el mensaje llega al agente
 
 El resultado debe ser **una línea concisa** con qué se hizo y el outcome clave:
 ```bash
 bt done <id> "correo enviado a soporte@nubosoft.com, adjunto PDF 3 págs, smtp 250"
+# → el usuario aprueba en el board → tarea cerrada automáticamente, sin más acción del agente
 ```
 
 ---

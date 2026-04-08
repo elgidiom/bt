@@ -1,22 +1,46 @@
 #!/usr/bin/env python3
-"""bt — Board Tool para agentes IT (versión central)
+"""bt — Board Tool para agentes IT.
 
-El directorio de datos se determina así (en orden de prioridad):
+El directorio del board se determina así (en orden de prioridad):
   1. Variable de entorno IT_BOARD_DIR
-  2. ~/.it-board/  (default)
+  2. Directorio real donde vive este script
 """
 
 import os, re, json, subprocess, sys
 from datetime import datetime
 from pathlib import Path
 
-BOARD_DIR     = Path(os.environ.get("IT_BOARD_DIR", Path.home() / ".it-board"))
+SCRIPT_DIR    = Path(__file__).resolve().parent
+BOARD_DIR     = Path(os.environ.get("IT_BOARD_DIR", str(SCRIPT_DIR))).expanduser().resolve()
 BOARD_FILE    = BOARD_DIR / "board.md"
 TASKS_DIR     = BOARD_DIR / "tasks"
 REVISAR_DIR   = BOARD_DIR / "para-revisar"
 MANIFEST_FILE = REVISAR_DIR / "manifest.json"
 WINDOWS_FILE  = BOARD_DIR / "windows.json"
 TMUX_SESSION  = os.environ.get("IT_TMUX_SESSION", "bt-agents")
+
+BOARD_TEMPLATE = """# Board — IT Agents
+
+> Fuente de verdad del trabajo activo. Leer antes de empezar cualquier tarea.
+
+## Activas
+
+| ID | Tarea | Owner | Estado | Actividad | Actualizado |
+|----|-------|-------|--------|-----------|-------------|
+| — | — | — | — | — | — |
+
+## En revisión / Bloqueadas
+
+| ID | Tarea | Owner | Bloqueador | Actualizado |
+|----|-------|-------|------------|-------------|
+| — | — | — | — | — |
+
+## Completadas
+
+| ID | Tarea | Owner | Resultado breve | Fecha |
+|----|-------|-------|-----------------|-------|
+| — | — | — | — | — |
+"""
 
 # ── utils ─────────────────────────────────────────────────────────────────────
 
@@ -48,6 +72,11 @@ def resolve_id(partial):
     print(f"No encontrado: {partial}")
     return None
 
+def normalize_task_id(task_id):
+    if not task_id:
+        return None
+    return resolve_id(task_id)
+
 def read_windows():
     try:
         if WINDOWS_FILE.exists():
@@ -58,6 +87,17 @@ def read_windows():
 
 def write_windows(data):
     WINDOWS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+
+def ensure_board_layout():
+    BOARD_DIR.mkdir(parents=True, exist_ok=True)
+    TASKS_DIR.mkdir(parents=True, exist_ok=True)
+    REVISAR_DIR.mkdir(parents=True, exist_ok=True)
+    if not BOARD_FILE.exists():
+        BOARD_FILE.write_text(BOARD_TEMPLATE)
+    if not WINDOWS_FILE.exists():
+        WINDOWS_FILE.write_text("{}\n")
+    if not MANIFEST_FILE.exists():
+        MANIFEST_FILE.write_text('{"items":[]}\n')
 
 # ── board: manipulación de tablas markdown ────────────────────────────────────
 
@@ -152,10 +192,11 @@ def update_status_in_board(lines, tid, status):
 
 # ── task files ────────────────────────────────────────────────────────────────
 
-def create_task_file(tid, title, owner="claude", priority="medium", workspace=""):
+def create_task_file(tid, title, owner="claude", priority="medium", workspace="", desc=""):
     TASKS_DIR.mkdir(parents=True, exist_ok=True)
     path = TASKS_DIR / f"{tid}.md"
     ws_line = f"Workspace: {workspace}\n" if workspace else ""
+    input_section = desc if desc else title
     path.write_text(f"""# {tid} — {title}
 
 Owner: {owner}
@@ -164,7 +205,7 @@ Priority: {priority}
 Date: {today()}
 {ws_line}
 ## Qué se pide
-{title}
+{input_section}
 
 ## Cómo hacerlo
 1. Paso 1
@@ -217,18 +258,19 @@ def task_set_blocker(tid, reason):
 # ── comandos ──────────────────────────────────────────────────────────────────
 
 def cmd_new(args):
-    if not args: return print("Uso: bt new \"titulo\" [--owner nombre] [--priority media] [--workspace ws]")
-    title, owner, priority, workspace = args[0], "claude", "medium", ""
+    if not args: return print("Uso: bt new \"titulo\" [--owner nombre] [--priority media] [--workspace ws] [--desc \"descripcion completa\"]")
+    title, owner, priority, workspace, desc = args[0], "claude", "medium", "", ""
     i = 1
     while i < len(args):
         if args[i] == "--owner"     and i+1 < len(args): owner     = args[i+1]; i += 2
         elif args[i] == "--priority" and i+1 < len(args): priority = args[i+1]; i += 2
         elif args[i] == "--workspace" and i+1 < len(args): workspace = args[i+1]; i += 2
+        elif args[i] == "--desc"     and i+1 < len(args): desc      = args[i+1]; i += 2
         else: i += 1
 
-    BOARD_DIR.mkdir(parents=True, exist_ok=True)
+    ensure_board_layout()
     tid = make_id(title)
-    create_task_file(tid, title, owner, priority, workspace)
+    create_task_file(tid, title, owner, priority, workspace, desc)
     lines = BOARD_FILE.read_text().splitlines()
     lines = add_row(lines, S_ACTIVAS, [tid, title, owner, "pending", "", today()])
     BOARD_FILE.write_text("\n".join(lines) + "\n")
@@ -238,8 +280,27 @@ def cmd_start(args):
     if not args: return print("Uso: bt start <id>")
     if not (tid := resolve_id(args[0])): return
     task_set_field(tid, "Status", "in_progress")
-    lines = update_row_cols(BOARD_FILE.read_text().splitlines(), tid,
-                            {"estado": "in_progress", "actividad": "iniciando...", "actualizado": today()})
+    lines = BOARD_FILE.read_text().splitlines()
+    # Detectar si la tarea está en la sección Bloqueadas/Revisión y moverla a Activas
+    in_blocked = False
+    for i, l in enumerate(lines):
+        if l.strip().startswith('|') and tid in l:
+            for j in range(i-1, -1, -1):
+                m = re.match(r'^## (.+)', lines[j])
+                if m:
+                    sec = m.group(1).strip()
+                    if "bloqueada" in sec.lower() or "revisión" in sec.lower() or "revision" in sec.lower():
+                        in_blocked = True
+                    break
+            break
+    if in_blocked:
+        lines, old, _ = remove_row(lines, tid)
+        title = old[1] if old and len(old) > 1 else tid
+        owner = old[2] if old and len(old) > 2 else "—"
+        lines = add_row(lines, S_ACTIVAS, [tid, title, owner, "in_progress", "retomando...", today()])
+    else:
+        lines = update_row_cols(lines, tid,
+                                {"estado": "in_progress", "actividad": "iniciando...", "actualizado": today()})
     BOARD_FILE.write_text("\n".join(lines) + "\n")
     print(f"✓ {tid} → in_progress")
 
@@ -248,8 +309,27 @@ def cmd_log(args):
     if not (tid := resolve_id(args[0])): return
     msg = " ".join(args[1:])
     task_append_progress(tid, msg)
-    lines = update_row_cols(BOARD_FILE.read_text().splitlines(), tid,
-                            {"actividad": msg[:200], "actualizado": today()})
+    task_set_field(tid, "Status", "in_progress")
+    lines = BOARD_FILE.read_text().splitlines()
+    # Si la tarea está en Bloqueadas, moverla a Activas al retomar trabajo
+    in_blocked = False
+    for i, l in enumerate(lines):
+        if l.strip().startswith('|') and tid in l:
+            for j in range(i-1, -1, -1):
+                m = re.match(r'^## (.+)', lines[j])
+                if m:
+                    sec = m.group(1).strip()
+                    if "bloqueada" in sec.lower() or "revisión" in sec.lower() or "revision" in sec.lower():
+                        in_blocked = True
+                    break
+            break
+    if in_blocked:
+        lines, old, _ = remove_row(lines, tid)
+        title = old[1] if old and len(old) > 1 else tid
+        owner = old[2] if old and len(old) > 2 else "—"
+        lines = add_row(lines, S_ACTIVAS, [tid, title, owner, "in_progress", msg[:200], today()])
+    else:
+        lines = update_row_cols(lines, tid, {"actividad": msg[:200], "actualizado": today()})
     BOARD_FILE.write_text("\n".join(lines) + "\n")
     print(f"✓ {tid}")
 
@@ -267,11 +347,15 @@ def cmd_block(args):
     BOARD_FILE.write_text("\n".join(lines) + "\n")
     print(f"✓ {tid} → bloqueada: {reason}")
 
-def cmd_done(args):
-    if len(args) < 2: return print("Uso: bt done <id> \"resultado\"")
-    if not (tid := resolve_id(args[0])): return
-    result = " ".join(args[1:])
+def _finalize_task(tid, result):
+    """Ejecuta el cierre real de la tarea (mover a Completadas, limpiar, cerrar tmux)."""
     task_set_field(tid, "Status", "done")
+    # Limpiar PendingResult si existe
+    path = TASKS_DIR / f"{tid}.md"
+    if path.exists():
+        content = path.read_text()
+        content = re.sub(r'^PendingResult: .+\n', '', content, flags=re.MULTILINE)
+        path.write_text(content)
     task_append_progress(tid, f"completada — {result}")
     task_set_result(tid, result)
     lines = BOARD_FILE.read_text().splitlines()
@@ -287,13 +371,19 @@ def cmd_done(args):
     try:
         if MANIFEST_FILE.exists():
             manifest = json.loads(MANIFEST_FILE.read_text())
-            linked = [i for i in manifest.get("items", []) if i.get("task_id") == tid]
+            linked = [
+                i for i in manifest.get("items", [])
+                if normalize_task_id(i.get("task_id")) == tid
+            ]
             if linked:
                 for item in linked:
                     f = REVISAR_DIR / item["file"]
                     if f.exists():
                         f.unlink()
-                manifest["items"] = [i for i in manifest["items"] if i.get("task_id") != tid]
+                manifest["items"] = [
+                    i for i in manifest["items"]
+                    if normalize_task_id(i.get("task_id")) != tid
+                ]
                 MANIFEST_FILE.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
                 print(f"  → {len(linked)} item(s) de para-revisar eliminados")
     except Exception:
@@ -312,6 +402,68 @@ def cmd_done(args):
     except Exception:
         pass
 
+def cmd_done(args):
+    """bt done <id> "resultado" — solicita cierre (requiere confirmación del usuario)."""
+    if len(args) < 2: return print("Uso: bt done <id> \"resultado\"")
+    if not (tid := resolve_id(args[0])): return
+    result = " ".join(args[1:])
+
+    # Guardar resultado propuesto en el archivo de tarea
+    path = TASKS_DIR / f"{tid}.md"
+    if path.exists():
+        content = path.read_text()
+        # Reemplazar o insertar PendingResult después de la primera línea de metadatos
+        if re.search(r'^PendingResult: ', content, re.MULTILINE):
+            content = re.sub(r'^PendingResult: .+$', f'PendingResult: {result}', content, flags=re.MULTILINE)
+        else:
+            # Insertar después de la última línea de metadatos (antes de la primera sección ##)
+            content = re.sub(r'(Date: .+\n)', rf'\1PendingResult: {result}\n', content, count=1)
+            if f'PendingResult: {result}' not in content:
+                # fallback: insertar después de la primera línea
+                lines_c = content.splitlines()
+                lines_c.insert(1, f'PendingResult: {result}')
+                content = "\n".join(lines_c) + "\n"
+        path.write_text(content)
+
+    task_append_progress(tid, f"resultado propuesto: {result}")
+    blocker = f"esperando aprobación: cerrar — {result[:180]}"
+    task_set_field(tid, "Status", "blocked")
+    task_set_blocker(tid, blocker)
+    lines = BOARD_FILE.read_text().splitlines()
+    lines, old, _ = remove_row(lines, tid)
+    if old:
+        lines = add_row(lines, S_BLOQUEADAS, [tid, old[1] if len(old)>1 else tid,
+                                              old[2] if len(old)>2 else "—", blocker, today()])
+    BOARD_FILE.write_text("\n".join(lines) + "\n")
+    print(f"✓ {tid} → esperando aprobación para cerrar")
+    print(f"  Resultado: {result}")
+    print(f"  → El usuario aprueba (✓) en el board — el cierre es automático, no se requiere acción del agente.")
+
+def cmd_finalize(args):
+    """bt finalize <id> — cierra la tarea definitivamente (ejecutar tras aprobación del usuario)."""
+    if not args: return print("Uso: bt finalize <id>")
+    if not (tid := resolve_id(args[0])): return
+
+    # Leer resultado pendiente del archivo de tarea
+    path = TASKS_DIR / f"{tid}.md"
+    result = ""
+    if path.exists():
+        for line in path.read_text().splitlines():
+            if line.startswith("PendingResult: "):
+                result = line[len("PendingResult: "):].strip()
+                break
+
+    if not result:
+        # Permitir pasar resultado directo como argumento
+        if len(args) > 1:
+            result = " ".join(args[1:])
+        else:
+            print(f"No hay resultado pendiente para {tid}.")
+            print("Usa: bt finalize <id> \"resultado\" para forzar cierre.")
+            return
+
+    _finalize_task(tid, result)
+
 def cmd_revisar(args):
     if len(args) < 2:
         return print('Uso: bt revisar <ruta-o-nombre> "titulo" ["nota"] [--task <id>]')
@@ -326,6 +478,10 @@ def cmd_revisar(args):
         else:
             if not note: note = args[i]
             i += 1
+    if task_id:
+        task_id = normalize_task_id(task_id)
+        if not task_id:
+            return
     dest_name = src.name
     dest = REVISAR_DIR / dest_name
     if src.resolve() != dest.resolve():
@@ -420,9 +576,7 @@ def cmd_ls(args):
 
 def cmd_status(args):
     """bt status — muestra resumen del board"""
-    if not BOARD_FILE.exists():
-        print("Board no encontrado. Ejecuta install.sh primero.")
-        return
+    ensure_board_layout()
     lines = BOARD_FILE.read_text().splitlines()
     in_sec = None
     counts = {}
@@ -436,6 +590,16 @@ def cmd_status(args):
     for sec, n in counts.items():
         print(f"  {sec}: {n}")
     print(f"  Board: {BOARD_FILE}")
+
+def cmd_show(args):
+    """bt show <id> — muestra el archivo markdown de una tarea"""
+    if not args: return print("Uso: bt show <id>")
+    if not (tid := resolve_id(args[0])): return
+    path = TASKS_DIR / f"{tid}.md"
+    if not path.exists():
+        print(f"No encontrado: {tid}")
+        return
+    print(path.read_text(), end="")
 
 def cmd_serve(args):
     """bt serve — levanta el servidor HTTP del board"""
@@ -492,30 +656,35 @@ def cmd_serve(args):
 # ── main ──────────────────────────────────────────────────────────────────────
 
 CMDS = {
-    "new":     cmd_new,
-    "start":   cmd_start,
-    "log":     cmd_log,
-    "block":   cmd_block,
-    "done":    cmd_done,
-    "revisar": cmd_revisar,
-    "ls":      cmd_ls,
-    "status":  cmd_status,
-    "serve":   cmd_serve,
+    "new":      cmd_new,
+    "start":    cmd_start,
+    "log":      cmd_log,
+    "block":    cmd_block,
+    "done":     cmd_done,
+    "finalize": cmd_finalize,
+    "revisar":  cmd_revisar,
+    "ls":       cmd_ls,
+    "show":     cmd_show,
+    "status":   cmd_status,
+    "serve":    cmd_serve,
 }
 
 def main():
+    ensure_board_layout()
     if len(sys.argv) < 2 or sys.argv[1] not in CMDS:
         print("bt — Board Tool\n")
         print("Comandos:")
-        print("  bt new \"titulo\" [--owner X] [--workspace X]")
+        print("  bt new \"titulo\" [--owner X] [--workspace X] [--desc \"descripcion completa\"]")
         print("  bt start <id>")
         print("  bt log <id> \"mensaje\"")
         print("  bt block <id> \"razon\"")
-        print("  bt done <id> \"resultado\"")
-        print("  bt revisar <archivo> \"titulo\" [\"nota\"]")
+        print("  bt done <id> \"resultado\"     # solicita cierre (requiere aprobación)")
+        print("  bt finalize <id>               # cierra definitivamente tras aprobación")
+        print("  bt revisar <archivo> \"titulo\" [\"nota\"] [--task <id>]")
         print("  bt ls [pending|in_progress|blocked|done|all]")
+        print("  bt show <id>")
         print("  bt status")
-        print("  bt serve [--port N]")
+        print("  bt serve [--port N] [--restart]")
         print(f"\nBoard: {BOARD_FILE}")
         return
     CMDS[sys.argv[1]](sys.argv[2:])
