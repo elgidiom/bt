@@ -2,6 +2,8 @@ board.md
 windows.json
 config.json
 tasks/
-para-revisar/
+para-revisar/*
+!para-revisar/index.html
+!para-revisar/viewer.html
 *.pyc
 __pycache__/

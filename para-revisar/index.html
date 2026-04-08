@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Para Revisar — IT Board</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #e2e8f0; min-height: 100vh; padding: 32px 24px; }
+  header { display: flex; align-items: center; gap: 16px; margin-bottom: 32px; }
+  header a { color: #60a5fa; text-decoration: none; font-size: 13px; }
+  header a:hover { text-decoration: underline; }
+  h1 { font-size: 22px; font-weight: 700; color: #f1f5f9; }
+  .subtitle { font-size: 13px; color: #64748b; margin-top: 4px; }
+  .empty { text-align: center; color: #475569; padding: 60px 0; font-size: 15px; }
+  .item { background: #1e2433; border: 1px solid #2d3748; border-radius: 12px; padding: 20px 24px; margin-bottom: 14px; display: flex; align-items: flex-start; gap: 18px; }
+  .item.reviewed { opacity: 0.5; }
+  .icon { font-size: 32px; flex-shrink: 0; margin-top: 2px; }
+  .info { flex: 1; min-width: 0; }
+  .info h3 { font-size: 15px; font-weight: 600; color: #f1f5f9; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .info .meta { font-size: 12px; color: #64748b; margin-bottom: 6px; }
+  .info .note { font-size: 13px; color: #94a3b8; background: #0f1117; border-radius: 6px; padding: 8px 12px; border-left: 3px solid #3b82f6; }
+  .badge { display: inline-block; font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 20px; margin-left: 8px; vertical-align: middle; }
+  .badge.pending { background: #78350f; color: #fcd34d; }
+  .badge.done { background: #14532d; color: #86efac; }
+  .actions { display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; }
+  .btn { font-size: 12px; font-weight: 600; padding: 7px 14px; border-radius: 7px; border: none; cursor: pointer; text-decoration: none; display: inline-block; text-align: center; }
+  .btn-open { background: #1d4ed8; color: #fff; }
+  .btn-open:hover { background: #2563eb; }
+  .btn-mark { background: #1e3a2f; color: #86efac; }
+  .btn-mark:hover { background: #166534; color: #fff; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <div style="display:flex;align-items:center;gap:12px">
+      <a href="/">&larr; Board</a>
+      <h1>📋 Para Revisar</h1>
+    </div>
+    <div class="subtitle" id="subtitle">Archivos pendientes de aprobación</div>
+  </div>
+</header>
+
+<div id="list"><div class="empty">Cargando…</div></div>
+
+<script>
+const ICONS = { pdf: '📄', png: '🖼️', jpg: '🖼️', doc: '📝', docx: '📝', csv: '📊', xlsx: '📊', md: '📋', default: '📎' };
+
+function ext(file) { return file.split('.').pop().toLowerCase(); }
+function icon(file) { return ICONS[ext(file)] || ICONS.default; }
+function openUrl(file) { return ext(file) === 'md' ? `viewer.html?file=${encodeURIComponent(file)}` : file; }
+
+async function load() {
+  const r = await fetch('manifest.json?t=' + Date.now());
+  if (!r.ok) { document.getElementById('list').innerHTML = '<div class="empty">No se encontró manifest.json</div>'; return; }
+  const data = await r.json();
+  const items = data.items || [];
+  const pending = items.filter(i => !i.reviewed);
+  const done = items.filter(i => i.reviewed);
+  document.getElementById('subtitle').textContent =
+    `${pending.length} pendiente${pending.length !== 1 ? 's' : ''} · ${done.length} revisado${done.length !== 1 ? 's' : ''}`;
+  if (items.length === 0) {
+    document.getElementById('list').innerHTML = '<div class="empty">✅ No hay archivos pendientes de revisión</div>';
+    return;
+  }
+  const sorted = [...pending, ...done];
+  document.getElementById('list').innerHTML = sorted.map(item => `
+    <div class="item ${item.reviewed ? 'reviewed' : ''}">
+      <div class="icon">${icon(item.file)}</div>
+      <div class="info">
+        <h3>${item.title || item.file}
+          <span class="badge ${item.reviewed ? 'done' : 'pending'}">${item.reviewed ? 'REVISADO' : 'PENDIENTE'}</span>
+        </h3>
+        <div class="meta">${item.file} &nbsp;·&nbsp; ${item.date || ''}</div>
+        ${item.note ? `<div class="note">${item.note}</div>` : ''}
+      </div>
+      <div class="actions">
+        <a class="btn btn-open" href="${openUrl(item.file)}" target="_blank">Abrir</a>
+      </div>
+    </div>
+  `).join('');
+}
+
+load();
+</script>
+</body>
+</html>
