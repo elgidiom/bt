@@ -80,7 +80,7 @@
   td { padding:11px 12px; border-bottom:1px solid #141824; color:#cbd5e1; vertical-align:top; }
   tr:last-child td { border-bottom:none; }
   tr:hover td { background:#141824; }
-  td:first-child { color:#64748b; font-size:11px; font-family:monospace; max-width:180px; word-break:break-all; }
+  td:first-child { color:#64748b; font-size:11px; font-family:monospace; width:110px; max-width:130px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 
   /* ── FAB + Modal ── */
   #fab {
@@ -177,7 +177,7 @@
 
   /* ── Approval inline ── */
   .approval-bar {
-    display: flex; align-items: center; gap: 6px;
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
     margin-top: 8px; padding-top: 8px;
     border-top: 1px solid #2d3748;
   }
@@ -198,6 +198,26 @@
     transition: background .15s;
   }
   .approval-cancel:hover { background: #7f1d1d; }
+
+  .task-actions {
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    margin-top: 8px;
+  }
+  .task-action-btn {
+    padding: 5px 10px; border-radius: 5px; border: none; cursor: pointer;
+    font-size: 12px; font-weight: 600; transition: background .15s; white-space: nowrap;
+  }
+  .task-action-done {
+    background: #123226; color: #4ade80;
+  }
+  .task-action-done:hover { background: #166534; }
+  .task-action-cancel {
+    background: #3b1212; color: #f87171;
+  }
+  .task-action-cancel:hover { background: #7f1d1d; }
+  .task-action-status {
+    font-size: 12px; color: #94a3b8;
+  }
 
   /* ── Log panel ── */
   .log-btn {
@@ -358,7 +378,6 @@ function interveneBar(taskId) {
     <input class="intervene-input" id="${iid}" placeholder="Redirigir o aclarar al agente…"
            onkeydown="if(event.key==='Enter')sendIntervene('${taskId}','${iid}','${bid}')">
     <button class="intervene-send" onclick="sendIntervene('${taskId}','${iid}','${bid}')">↩ Enviar</button>
-    <button class="intervene-cancel-task" onclick="cancelTask('${taskId}','${bid}')">✕ Cancelar tarea</button>
   </div>`;
 }
 
@@ -369,21 +388,58 @@ function toggleIntervene(barId) {
   if (bar.classList.contains('open')) bar.querySelector('.intervene-input')?.focus();
 }
 
-function needsApproval(blocker) {
-  return blocker && blocker.trim().length > 0;
+function blockerMode(blocker) {
+  const normalized = String(blocker || '').trim().toLowerCase();
+  if (normalized.startsWith('esperando aprobaci') && normalized.includes('cerrar')) return 'close';
+  if (normalized.startsWith('esperando aprobaci')) return 'approval';
+  if (normalized.startsWith('esperando input:')) return 'input';
+  return null;
+}
+
+function needsResponse(blocker) {
+  return blockerMode(blocker) !== null;
 }
 
 function approvalBar(taskId, blocker) {
   const uid = 'ap' + Math.random().toString(36).slice(2);
+  const bid = 'ab' + Math.random().toString(36).slice(2);
   const sid = 'as' + Math.random().toString(36).slice(2);
-  const isApproval = blocker && blocker.toLowerCase().includes('esperando aprobaci');
-  const defaultVal = isApproval ? 'adelante' : '';
-  const placeholder = isApproval ? 'respuesta…' : 'instrucción para el agente…';
+  const mode = blockerMode(blocker);
+  if (!mode) return '';
+
+  // Para "esperando aprobación: cerrar": solo campo para pedir más (Aprobar/Rechazar eliminados).
+  if (mode === 'close') {
+    const resultPreview = blocker.replace(/^esperando aprobaci[oó]n:\s*cerrar\s*[—\-–]\s*/i, '').trim();
+    return `<div class="approval-bar" id="${bid}">
+      ${resultPreview ? `<div style="font-size:11px;color:#94a3b8;word-break:break-word;flex:1 1 100%;min-width:0">Resultado: <em>${resultPreview}</em></div>` : ''}
+      <input class="intervene-input" id="${uid}" placeholder="pedir algo más al agente…"
+             onkeydown="if(event.key==='Enter'&&this.value.trim())sendIntervene('${taskId}','${uid}','${bid}')">
+      <button class="intervene-send" onclick="if(document.getElementById('${uid}').value.trim())sendIntervene('${taskId}','${uid}','${bid}')">↩ Enviar</button>
+    </div>`;
+  }
+
+  const defaultVal = mode === 'approval' ? 'adelante' : '';
+  const placeholder = mode === 'approval' ? 'respuesta…' : 'respuesta para el agente…';
+  const sendLabel = mode === 'approval' ? '✓ Aprobar' : '↩ Responder';
+  const rejectButton = mode === 'approval'
+    ? `<button class="approval-cancel" onclick="sendApproval('${taskId}','${uid}','${sid}',false)">✗ Rechazar</button>`
+    : '';
   return `<div class="approval-bar">
     <input class="approval-input" id="${uid}" value="${defaultVal}" placeholder="${placeholder}">
-    <button class="approval-send" onclick="sendApproval('${taskId}','${uid}','${sid}',true)">✓ Enviar</button>
-    <button class="approval-cancel" onclick="sendApproval('${taskId}','${uid}','${sid}',false)">✗ No</button>
+    <button class="approval-send" onclick="sendApproval('${taskId}','${uid}','${sid}',true)">${sendLabel}</button>
+    ${rejectButton}
     <span id="${sid}" style="font-size:11px;color:#64748b;"></span>
+  </div>`;
+}
+
+function taskActions(taskId, isClose) {
+  const aid = 'ta' + Math.random().toString(36).slice(2);
+  const doneClick = isClose
+    ? `approveClose('${taskId}','${aid}')`
+    : `completeTask('${taskId}','${aid}')`;
+  return `<div class="task-actions" id="${aid}">
+    <button class="task-action-btn task-action-done" onclick="${doneClick}">✓ Done</button>
+    <button class="task-action-btn task-action-cancel" onclick="cancelTask('${taskId}','${aid}')">✕ Cancelar</button>
   </div>`;
 }
 
@@ -403,9 +459,12 @@ function renderTable(table) {
     const blocker  = row[idx['bloqueador']] || '';
     const taskId   = row[0] || '';
     const status   = row[idx['estado'] ?? idx['status']] || '';
+    const isDoneSection = idx['resultado breve'] !== undefined;
     const isActive = status.toLowerCase().replace(/\s/g,'_') === 'in_progress';
-    const showApproval = needsApproval(blocker);
+    const showResponse = needsResponse(blocker);
+    const showIntervene = !!taskId && !isDoneSection && !showResponse;
     const showLog = !!taskId;
+    const showTaskActions = !!taskId && !isDoneSection;
 
     h += `<tr>`;
     row.forEach((cell, i) => {
@@ -414,20 +473,23 @@ function renderTable(table) {
       if ((hdr==='estado'||hdr==='status') && isActive) {
         content += ` <button class="ping-btn" onclick="pingAgent('${taskId}',this)" title="Pedir actualización de estado">?</button>`;
       }
-      if (showApproval && hdr === 'bloqueador') {
+      if (showResponse && hdr === 'bloqueador') {
         content += approvalBar(taskId, blocker);
       }
-      if (isActive && (hdr === 'actividad')) {
+      if (showIntervene && (hdr === 'actividad')) {
         content += `<div style="margin-top:4px">${interveneBar(taskId)}</div>`;
       }
       if (showLog && (hdr === 'actualizado' || hdr === 'fecha')) {
         content += `<br><button class="log-btn" data-log-btn="${taskId}" onclick="toggleLog('${taskId}')">▸ logs</button>`;
+        if (showTaskActions) {
+          content += taskActions(taskId, blockerMode(blocker) === 'close');
+        }
       }
       h += `<td>${content}</td>`;
     });
     h += `</tr>`;
     if (showLog) {
-      h += `<tr class="log-row" id="logrow-${taskId}" style="display:none"><td colspan="${table.headers.length}"><pre id="log-${taskId}" class="log-content">cargando…</pre></td></tr>`;
+      h += `<tr class="log-row" data-log-row="${taskId}" style="display:none"><td colspan="${table.headers.length}"><pre data-log-panel="${taskId}" class="log-content">cargando…</pre></td></tr>`;
     }
   });
   return h + `</tbody></table></div>`;
@@ -457,8 +519,11 @@ function renderCards(table) {
     const activity = get(row, 'actividad');
     const blocker  = get(row, 'bloqueador');
     const taskId   = row[0] || '';
-    const showApproval   = needsApproval(blocker);
+    const isDoneSection = idx['resultado breve'] !== undefined;
+    const showResponse   = needsResponse(blocker);
     const isActiveCard   = (status||'').toLowerCase().replace(/\s/g,'_') === 'in_progress';
+    const showIntervene  = !!taskId && !isDoneSection && !showResponse;
+    const showTaskActions = !!taskId && !isDoneSection;
 
     const tid = `t${Math.random().toString(36).slice(2)}`;
     h += `<div class="card">
@@ -476,9 +541,10 @@ function renderCards(table) {
       </div>
       ${activity ? `<div class="card-activity">${activity}</div>` : ''}
       ${extra && !activity ? (() => { const rid = `r${Math.random().toString(36).slice(2)}`; return `<div class="card-result clamped" id="${rid}">${extra}</div><button class="ver-mas" onclick="toggleVerMas(this,'${rid}')">ver más</button>`; })() : ''}
-      ${showApproval ? approvalBar(taskId, blocker) : ''}
-      ${isActiveCard ? interveneBar(taskId) : ''}
-      ${taskId ? `<div class="card-log"><button class="log-btn" data-log-btn="${taskId}" onclick="toggleLog('${taskId}')">▸ logs</button><pre id="log-${taskId}" class="log-content" style="display:none">cargando…</pre></div>` : ''}
+      ${showResponse ? approvalBar(taskId, blocker) : ''}
+      ${showIntervene ? interveneBar(taskId) : ''}
+      ${showTaskActions ? taskActions(taskId, blockerMode(blocker) === 'close') : ''}
+      ${taskId ? `<div class="card-log"><button class="log-btn" data-log-btn="${taskId}" onclick="toggleLog('${taskId}')">▸ logs</button><pre data-log-panel="${taskId}" class="log-content" style="display:none">cargando…</pre></div>` : ''}
     </div>`;
   });
   return h + `</div>`;
@@ -534,8 +600,9 @@ async function fetchTaskLog(taskId) {
     if (!r.ok) return;
     const d = await r.json();
     logCache[taskId] = d.progress || '(sin logs aún)';
-    const el = document.getElementById('log-' + taskId);
-    if (el) el.textContent = logCache[taskId];
+    document.querySelectorAll(`[data-log-panel="${taskId}"]`).forEach(el => {
+      el.textContent = logCache[taskId];
+    });
   } catch {}
 }
 
@@ -546,13 +613,12 @@ function toggleLog(taskId) {
     logPanels.add(taskId);
     fetchTaskLog(taskId);
   }
-  // tabla
-  const row = document.getElementById('logrow-' + taskId);
-  if (row) row.style.display = logPanels.has(taskId) ? '' : 'none';
-  // card
-  const panel = document.getElementById('log-' + taskId);
-  if (panel) panel.style.display = logPanels.has(taskId) ? 'block' : 'none';
-  // botones
+  document.querySelectorAll(`[data-log-row="${taskId}"]`).forEach(row => {
+    row.style.display = logPanels.has(taskId) ? '' : 'none';
+  });
+  document.querySelectorAll(`[data-log-panel="${taskId}"]`).forEach(panel => {
+    panel.style.display = logPanels.has(taskId) ? 'block' : 'none';
+  });
   document.querySelectorAll(`[data-log-btn="${taskId}"]`).forEach(btn => {
     btn.textContent = logPanels.has(taskId) ? '▾ logs' : '▸ logs';
   });
@@ -560,10 +626,13 @@ function toggleLog(taskId) {
 
 function restoreLogPanels() {
   for (const taskId of logPanels) {
-    const row = document.getElementById('logrow-' + taskId);
-    if (row) row.style.display = '';
-    const panel = document.getElementById('log-' + taskId);
-    if (panel) { panel.style.display = 'block'; panel.textContent = logCache[taskId] || 'cargando…'; }
+    document.querySelectorAll(`[data-log-row="${taskId}"]`).forEach(row => {
+      row.style.display = '';
+    });
+    document.querySelectorAll(`[data-log-panel="${taskId}"]`).forEach(panel => {
+      panel.style.display = 'block';
+      panel.textContent = logCache[taskId] || 'cargando…';
+    });
     document.querySelectorAll(`[data-log-btn="${taskId}"]`).forEach(btn => btn.textContent = '▾ logs');
   }
 }
@@ -738,21 +807,60 @@ async function sendIntervene(taskId, inputId, barId) {
   }
 }
 
-async function cancelTask(taskId, barId) {
-  if (!confirm(`¿Cancelar la tarea ${taskId}?`)) return;
-  const bar = document.getElementById(barId);
-  if (bar) bar.innerHTML = `<span style="font-size:12px;color:#94a3b8;">cancelando…</span>`;
+async function approveClose(taskId, barId) {
+  const box = document.getElementById(barId);
+  if (box) box.innerHTML = `<span style="font-size:12px;color:#4ade80;">aprobando…</span>`;
   try {
-    const r = await fetch('/api/cancel', {
+    const r = await fetch('/api/done', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ task_id: taskId }),
     });
     const d = await r.json();
     if (d.ok) setTimeout(refresh, 800);
-    else if (bar) bar.innerHTML = `<span style="font-size:12px;color:#f87171;">Error: ${d.error}</span>`;
+    else if (box) box.innerHTML = `<span style="font-size:12px;color:#f87171;">Error: ${d.error}</span>`;
   } catch(e) {
-    if (bar) bar.innerHTML = `<span style="font-size:12px;color:#f87171;">${e.message}</span>`;
+    if (box) box.innerHTML = `<span style="font-size:12px;color:#f87171;">${e.message}</span>`;
+  }
+}
+
+async function completeTask(taskId, containerId) {
+  const result = prompt(`Resultado para marcar ${taskId} como done:`, 'completada manualmente desde el board');
+  if (result === null) return;
+  const finalResult = result.trim() || 'completada manualmente desde el board';
+  const box = document.getElementById(containerId);
+  if (box) box.innerHTML = `<span class="task-action-status">marcando done…</span>`;
+  try {
+    const r = await fetch('/api/done', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_id: taskId, result: finalResult }),
+    });
+    const d = await r.json();
+    if (d.ok) setTimeout(refresh, 800);
+    else if (box) box.innerHTML = `<span class="task-action-status" style="color:#f87171;">Error: ${d.error}</span>`;
+  } catch(e) {
+    if (box) box.innerHTML = `<span class="task-action-status" style="color:#f87171;">${e.message}</span>`;
+  }
+}
+
+async function cancelTask(taskId, containerId) {
+  const reason = prompt(`Motivo para cancelar ${taskId}:`, 'cancelada manualmente desde el board');
+  if (reason === null) return;
+  const finalReason = reason.trim() || 'cancelada manualmente desde el board';
+  const box = document.getElementById(containerId);
+  if (box) box.innerHTML = `<span class="task-action-status">cancelando…</span>`;
+  try {
+    const r = await fetch('/api/cancel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task_id: taskId, result: finalReason }),
+    });
+    const d = await r.json();
+    if (d.ok) setTimeout(refresh, 800);
+    else if (box) box.innerHTML = `<span class="task-action-status" style="color:#f87171;">Error: ${d.error}</span>`;
+  } catch(e) {
+    if (box) box.innerHTML = `<span class="task-action-status" style="color:#f87171;">${e.message}</span>`;
   }
 }
 
