@@ -23,6 +23,12 @@ BOARD_TEMPLATE = """# Board — IT Agents
 
 > Fuente de verdad del trabajo activo. Leer antes de empezar cualquier tarea.
 
+## Programadas
+
+| ID | Tarea | Owner | Programada para | Workspace |
+|----|-------|-------|-----------------|-----------|
+| — | — | — | — | — |
+
 ## Activas
 
 | ID | Tarea | Owner | Estado | Actividad | Actualizado |
@@ -98,12 +104,30 @@ def ensure_board_layout():
         WINDOWS_FILE.write_text("{}\n")
     if not MANIFEST_FILE.exists():
         MANIFEST_FILE.write_text('{"items":[]}\n')
+    _ensure_programadas_section()
+
+def _ensure_programadas_section():
+    """Agrega la sección Programadas a board.md si no existe."""
+    if not BOARD_FILE.exists():
+        return
+    content = BOARD_FILE.read_text()
+    if "## Programadas" in content:
+        return
+    section = (
+        "## Programadas\n\n"
+        "| ID | Tarea | Owner | Programada para | Workspace |\n"
+        "|----|-------|-------|-----------------|----------|\n"
+        "| — | — | — | — | — |\n\n"
+    )
+    content = content.replace("## Activas", section + "## Activas")
+    BOARD_FILE.write_text(content)
 
 # ── board: manipulación de tablas markdown ────────────────────────────────────
 
 S_ACTIVAS     = "Activas"
 S_BLOQUEADAS  = "En revisión / Bloqueadas"
 S_COMPLETADAS = "Completadas"
+S_PROGRAMADAS = "Programadas"
 
 def trow(cols):
     return "| " + " | ".join(str(c) for c in cols) + " |"
@@ -192,18 +216,20 @@ def update_status_in_board(lines, tid, status):
 
 # ── task files ────────────────────────────────────────────────────────────────
 
-def create_task_file(tid, title, owner="claude", priority="medium", workspace="", desc=""):
+def create_task_file(tid, title, owner="claude", priority="medium", workspace="", desc="", scheduled_at=""):
     TASKS_DIR.mkdir(parents=True, exist_ok=True)
     path = TASKS_DIR / f"{tid}.md"
     ws_line = f"Workspace: {workspace}\n" if workspace else ""
+    sched_line = f"Scheduled: {scheduled_at}\n" if scheduled_at else ""
+    initial_status = "scheduled" if scheduled_at else "pending"
     input_section = desc if desc else title
     path.write_text(f"""# {tid} — {title}
 
 Owner: {owner}
-Status: pending
+Status: {initial_status}
 Priority: {priority}
 Date: {today()}
-{ws_line}
+{ws_line}{sched_line}
 ## Qué se pide
 {input_section}
 
@@ -213,7 +239,7 @@ Date: {today()}
 3. Validar
 
 ## Progreso
-- {now()} — tarea creada
+- {now()} — tarea creada{' (programada para ' + scheduled_at + ')' if scheduled_at else ''}
 
 ## Bloqueadores
 ninguno
@@ -281,23 +307,23 @@ def cmd_start(args):
     if not (tid := resolve_id(args[0])): return
     task_set_field(tid, "Status", "in_progress")
     lines = BOARD_FILE.read_text().splitlines()
-    # Detectar si la tarea está en la sección Bloqueadas/Revisión y moverla a Activas
-    in_blocked = False
+    # Detectar si la tarea está en Bloqueadas/Revisión/Programadas y moverla a Activas
+    needs_move = False
     for i, l in enumerate(lines):
         if l.strip().startswith('|') and tid in l:
             for j in range(i-1, -1, -1):
                 m = re.match(r'^## (.+)', lines[j])
                 if m:
-                    sec = m.group(1).strip()
-                    if "bloqueada" in sec.lower() or "revisión" in sec.lower() or "revision" in sec.lower():
-                        in_blocked = True
+                    sec = m.group(1).strip().lower()
+                    if any(kw in sec for kw in ["bloqueada", "revisión", "revision", "programada"]):
+                        needs_move = True
                     break
             break
-    if in_blocked:
+    if needs_move:
         lines, old, _ = remove_row(lines, tid)
         title = old[1] if old and len(old) > 1 else tid
         owner = old[2] if old and len(old) > 2 else "—"
-        lines = add_row(lines, S_ACTIVAS, [tid, title, owner, "in_progress", "retomando...", today()])
+        lines = add_row(lines, S_ACTIVAS, [tid, title, owner, "in_progress", "lanzando...", today()])
     else:
         lines = update_row_cols(lines, tid,
                                 {"estado": "in_progress", "actividad": "iniciando...", "actualizado": today()})
@@ -311,19 +337,19 @@ def cmd_log(args):
     task_append_progress(tid, msg)
     task_set_field(tid, "Status", "in_progress")
     lines = BOARD_FILE.read_text().splitlines()
-    # Si la tarea está en Bloqueadas, moverla a Activas al retomar trabajo
-    in_blocked = False
+    # Si la tarea está en Bloqueadas/Programadas, moverla a Activas al retomar trabajo
+    needs_move = False
     for i, l in enumerate(lines):
         if l.strip().startswith('|') and tid in l:
             for j in range(i-1, -1, -1):
                 m = re.match(r'^## (.+)', lines[j])
                 if m:
-                    sec = m.group(1).strip()
-                    if "bloqueada" in sec.lower() or "revisión" in sec.lower() or "revision" in sec.lower():
-                        in_blocked = True
+                    sec = m.group(1).strip().lower()
+                    if any(kw in sec for kw in ["bloqueada", "revisión", "revision", "programada"]):
+                        needs_move = True
                     break
             break
-    if in_blocked:
+    if needs_move:
         lines, old, _ = remove_row(lines, tid)
         title = old[1] if old and len(old) > 1 else tid
         owner = old[2] if old and len(old) > 2 else "—"
@@ -471,6 +497,34 @@ def cmd_finalize(args):
 
     _finalize_task(tid, result)
 
+def cmd_schedule(args):
+    """bt schedule "titulo" "YYYY-MM-DD HH:MM" [--owner X] [--workspace X] [--desc "..."]"""
+    if len(args) < 2:
+        return print('Uso: bt schedule "titulo" "YYYY-MM-DD HH:MM" [--owner X] [--workspace X] [--agent X] [--desc "descripcion"]')
+    title = args[0]
+    scheduled_at = args[1]
+    try:
+        datetime.strptime(scheduled_at, "%Y-%m-%d %H:%M")
+    except ValueError:
+        return print(f"Formato de fecha inválido: {scheduled_at!r} — usa YYYY-MM-DD HH:MM")
+
+    owner, priority, workspace, desc = "claude", "medium", "", ""
+    i = 2
+    while i < len(args):
+        if args[i] in ("--owner", "--agent") and i+1 < len(args): owner = args[i+1]; i += 2
+        elif args[i] == "--priority" and i+1 < len(args):          priority  = args[i+1]; i += 2
+        elif args[i] == "--workspace" and i+1 < len(args):         workspace = args[i+1]; i += 2
+        elif args[i] == "--desc"      and i+1 < len(args):         desc      = args[i+1]; i += 2
+        else: i += 1
+
+    ensure_board_layout()
+    tid = make_id(title)
+    create_task_file(tid, title, owner, priority, workspace, desc, scheduled_at=scheduled_at)
+    lines = BOARD_FILE.read_text().splitlines()
+    lines = add_row(lines, S_PROGRAMADAS, [tid, title, owner, scheduled_at, workspace or "—"])
+    BOARD_FILE.write_text("\n".join(lines) + "\n")
+    print(f"✓ programada: {tid} → {scheduled_at}")
+
 def cmd_revisar(args):
     if len(args) < 2:
         return print('Uso: bt revisar <ruta-o-nombre> "titulo" ["nota"] [--task <id>]')
@@ -521,14 +575,16 @@ def cmd_ls(args):
     STATUS_ALIASES = {
         "active": ["pending", "in_progress"],
         "activas": ["pending", "in_progress"],
+        "scheduled": ["scheduled"],
+        "programadas": ["scheduled"],
         "pending": ["pending"],
         "in_progress": ["in_progress"],
         "blocked": ["blocked"],
         "bloqueadas": ["blocked"],
         "done": ["done"],
         "completadas": ["done"],
-        "all": ["pending", "in_progress", "blocked", "done"],
-        "todas": ["pending", "in_progress", "blocked", "done"],
+        "all": ["pending", "in_progress", "blocked", "done", "scheduled"],
+        "todas": ["pending", "in_progress", "blocked", "done", "scheduled"],
     }
     filter_arg = args[0].lower() if args else None
     if filter_arg and filter_arg not in STATUS_ALIASES:
@@ -541,12 +597,14 @@ def cmd_ls(args):
         "pending":     "pending  ",
         "in_progress": "activa   ",
         "blocked":     "bloqueada",
+        "scheduled":   "programada",
         "done":        "done     ",
     }
     COLOR = {
         "pending":     "\033[33m",   # amarillo
         "in_progress": "\033[32m",   # verde
         "blocked":     "\033[31m",   # rojo
+        "scheduled":   "\033[35m",   # magenta
         "done":        "\033[90m",   # gris
     }
     RESET = "\033[0m"
@@ -664,6 +722,7 @@ def cmd_serve(args):
 
 CMDS = {
     "new":      cmd_new,
+    "schedule": cmd_schedule,
     "start":    cmd_start,
     "log":      cmd_log,
     "block":    cmd_block,
@@ -682,13 +741,14 @@ def main():
         print("bt — Board Tool\n")
         print("Comandos:")
         print("  bt new \"titulo\" [--owner X] [--workspace X] [--desc \"descripcion completa\"]")
+        print("  bt schedule \"titulo\" \"YYYY-MM-DD HH:MM\" [--owner X] [--workspace X] [--desc \"...\"]")
         print("  bt start <id>")
         print("  bt log <id> \"mensaje\"")
         print("  bt block <id> \"razon\"")
         print("  bt done <id> \"resultado\"     # solicita cierre (requiere aprobación)")
         print("  bt finalize <id>               # cierra definitivamente tras aprobación")
         print("  bt revisar <archivo> \"titulo\" [\"nota\"] [--task <id>]")
-        print("  bt ls [pending|in_progress|blocked|done|all]")
+        print("  bt ls [pending|in_progress|blocked|scheduled|done|all]")
         print("  bt show <id>")
         print("  bt status")
         print("  bt serve [--port N] [--restart]")

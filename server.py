@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Agent Board Server — sirve el board y despacha tareas a agentes vía tmux."""
 
-import json, os, re, shlex, subprocess
+import json, os, re, shlex, subprocess, threading, time
+from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import urlparse
@@ -27,6 +28,12 @@ DEFAULT_AGENT = "claude"
 BOARD_TEMPLATE = """# Board — IT Agents
 
 > Fuente de verdad del trabajo activo. Leer antes de empezar cualquier tarea.
+
+## Programadas
+
+| ID | Tarea | Owner | Programada para | Workspace |
+|----|-------|-------|-----------------|-----------|
+| — | — | — | — | — |
 
 ## Activas
 
@@ -62,8 +69,19 @@ MIME = {
 def ensure_board_layout():
     (BOARD_DIR / "tasks").mkdir(parents=True, exist_ok=True)
     (BOARD_DIR / "para-revisar").mkdir(parents=True, exist_ok=True)
-    if not (BOARD_DIR / "board.md").exists():
-        (BOARD_DIR / "board.md").write_text(BOARD_TEMPLATE)
+    board_md = BOARD_DIR / "board.md"
+    if not board_md.exists():
+        board_md.write_text(BOARD_TEMPLATE)
+    else:
+        content = board_md.read_text()
+        if "## Programadas" not in content:
+            section = (
+                "## Programadas\n\n"
+                "| ID | Tarea | Owner | Programada para | Workspace |\n"
+                "|----|-------|-------|-----------------|----------|\n"
+                "| — | — | — | — | — |\n\n"
+            )
+            board_md.write_text(content.replace("## Activas", section + "## Activas"))
     if not WINDOWS_FILE.exists():
         WINDOWS_FILE.write_text("{}\n")
     manifest = BOARD_DIR / "para-revisar" / "manifest.json"
@@ -168,6 +186,103 @@ def read_task_blocker(task_id: str) -> str:
     return ""
 
 
+def dispatch_task_by_id(task_id: str):
+    """Lanza el agente para una tarea programada que ya venció."""
+    task_file = BOARD_DIR / "tasks" / f"{task_id}.md"
+    if not task_file.exists():
+        return
+
+    content = task_file.read_text()
+    workspace_id, agent_id, title = "", DEFAULT_AGENT, task_id
+    desc_lines, in_desc = [], False
+
+    for line in content.splitlines():
+        if line.startswith("Workspace: "):   workspace_id = line[11:].strip()
+        elif line.startswith("Owner: "):     agent_id     = line[7:].strip()
+        elif line.startswith("# ") and " — " in line:
+            title = line.split(" — ", 1)[1].strip()
+        elif line.strip() == "## Qué se pide": in_desc = True
+        elif in_desc and line.startswith("## "): in_desc = False
+        elif in_desc: desc_lines.append(line)
+
+    desc = "\n".join(desc_lines).strip() or title
+    cfg = load_config()
+    ws_info  = cfg.get("workspaces", {}).get(workspace_id, {})
+    ws_path  = ws_info.get("path", str(BOARD_DIR))
+    ws_label = ws_info.get("label", workspace_id or "board")
+
+    if not Path(ws_path).exists():
+        return
+    if agent_id not in AGENT_CMDS:
+        agent_id = DEFAULT_AGENT
+
+    # Mover de Programadas → Activas
+    subprocess.run(
+        [str(BT), "start", task_id],
+        capture_output=True, text=True,
+        env={**os.environ, "IT_BOARD_DIR": str(BOARD_DIR)}
+    )
+
+    # Construir prompt y lanzar en tmux
+    agents_md = (BOARD_DIR / "AGENTS.md").read_text() if (BOARD_DIR / "AGENTS.md").exists() else ""
+    prompt = "\n".join([
+        agents_md,
+        "---",
+        f"Tu tarea ya está registrada en el board con ID: {task_id}",
+        f"Workspace activo: {ws_label} ({ws_path})",
+        f"Esta tarea fue programada y se activó automáticamente a la hora indicada.",
+        "",
+        f"TAREA: {desc}",
+        "",
+        f"Ya está marcada como in_progress. Usa bt log para reportar avance.",
+    ])
+
+    slug      = task_id.replace("task-", "")[-22:]
+    bin_dirs  = [str(SCRIPT_DIR), str(Path.home() / ".local" / "bin")]
+    agent_cmd = AGENT_CMDS[agent_id]
+    subprocess.run(["tmux", "new-session", "-d", "-s", TMUX_SESSION], capture_output=True)
+    cmd = (
+        f"export IT_BOARD_DIR={shlex.quote(str(BOARD_DIR))} && "
+        f"export PATH={shlex.quote(':'.join(bin_dirs))}:\"$PATH\" && "
+        f"cd {shlex.quote(ws_path)} && "
+        f"{agent_cmd} {shlex.quote(prompt)}"
+    )
+    subprocess.Popen(["tmux", "new-window", "-t", f"{TMUX_SESSION}:", "-n", slug, cmd])
+
+    windows = read_windows()
+    windows[task_id] = slug
+    write_windows(windows)
+
+
+def check_scheduled_tasks():
+    """Revisa tareas con Status: scheduled cuya hora ya llegó y las lanza."""
+    tasks_dir = BOARD_DIR / "tasks"
+    if not tasks_dir.exists():
+        return
+    now = datetime.now()
+    for task_file in sorted(tasks_dir.glob("task-*.md")):
+        try:
+            content   = task_file.read_text()
+            status    = next((l[8:].strip()  for l in content.splitlines() if l.startswith("Status: ")),    None)
+            sched_str = next((l[11:].strip() for l in content.splitlines() if l.startswith("Scheduled: ")), None)
+            if status != "scheduled" or not sched_str:
+                continue
+            if datetime.strptime(sched_str, "%Y-%m-%d %H:%M") <= now:
+                dispatch_task_by_id(task_file.stem)
+        except Exception:
+            pass
+
+
+def scheduler_loop():
+    """Hilo daemon que verifica tareas programadas cada 30 segundos."""
+    while True:
+        time.sleep(30)
+        try:
+            check_scheduled_tasks()
+        except Exception:
+            pass
+
+
 class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *args):
@@ -225,6 +340,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path == "/api/dispatch":
             self._dispatch()
+        elif self.path == "/api/schedule":
+            self._schedule()
         elif self.path == "/api/respond":
             self._respond()
         elif self.path == "/api/done":
@@ -335,6 +452,100 @@ class Handler(BaseHTTPRequestHandler):
         write_windows(windows)
 
         self.send_json(200, {"ok": True, "task_id": task_id, "workspace": ws_label})
+
+    def _schedule(self):
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            body = json.loads(self.rfile.read(length))
+        except Exception:
+            return self.send_json(400, {"error": "JSON inválido"})
+
+        context      = (body.get("context")      or "").strip()
+        workspace_id = (body.get("workspace")    or "").strip()
+        agent_id     = (body.get("agent")        or "").strip()
+        scheduled_at = (body.get("scheduled_at") or "").strip()
+
+        if not context:
+            return self.send_json(400, {"error": "context es requerido"})
+        if not scheduled_at:
+            return self.send_json(400, {"error": "scheduled_at requerido (YYYY-MM-DD HH:MM)"})
+
+        try:
+            scheduled_dt = datetime.strptime(scheduled_at, "%Y-%m-%d %H:%M")
+        except ValueError:
+            return self.send_json(400, {"error": f"Formato inválido: {scheduled_at} — usa YYYY-MM-DD HH:MM"})
+
+        title = (body.get("title") or "").strip()
+        if not title:
+            words = context.split()
+            title = " ".join(words[:8]) + ("…" if len(words) > 8 else "")
+
+        cfg = load_config()
+        if not workspace_id or workspace_id not in cfg.get("workspaces", {}):
+            workspace_id = cfg.get("default", "")
+        ws_info  = cfg.get("workspaces", {}).get(workspace_id, {})
+        ws_path  = ws_info.get("path", str(BOARD_DIR))
+        ws_label = ws_info.get("label", workspace_id)
+        if not Path(ws_path).exists():
+            return self.send_json(400, {"error": f"workspace inválido: {workspace_id}",
+                                        "detail": f"ruta no existe: {ws_path}"})
+
+        if not agent_id or agent_id not in AGENT_CMDS:
+            agent_id = ws_info.get("agent", "") or cfg.get("default_agent", DEFAULT_AGENT)
+        if agent_id not in AGENT_CMDS:
+            agent_id = DEFAULT_AGENT
+
+        # Si la hora ya pasó, despachar de inmediato
+        if scheduled_dt <= datetime.now():
+            result = subprocess.run(
+                [str(BT), "new", title, "--workspace", workspace_id, "--owner", agent_id, "--desc", context],
+                capture_output=True, text=True, cwd=ws_path,
+                env={**os.environ, "IT_BOARD_DIR": str(BOARD_DIR)}
+            )
+            task_id = next(
+                (l.split("creada:")[-1].strip() for l in (result.stdout + result.stderr).splitlines() if "creada:" in l),
+                None
+            )
+            if not task_id:
+                return self.send_json(500, {"error": "No se pudo crear la tarea",
+                                            "detail": result.stdout + result.stderr})
+            agents_md = (BOARD_DIR / "AGENTS.md").read_text() if (BOARD_DIR / "AGENTS.md").exists() else ""
+            prompt = "\n".join([agents_md, "---",
+                f"Tu tarea ya está registrada en el board con ID: {task_id}",
+                f"Workspace activo: {ws_label} ({ws_path})",
+                "NO uses 'bt new' — el task ya existe.", "",
+                f"TAREA: {context}", "", f"Empieza ahora con: bt start {task_id}"])
+            slug = task_id.replace("task-", "")[-22:]
+            bin_dirs = [str(SCRIPT_DIR), str(Path.home() / ".local" / "bin")]
+            subprocess.run(["tmux", "new-session", "-d", "-s", TMUX_SESSION], capture_output=True)
+            cmd = (f"export IT_BOARD_DIR={shlex.quote(str(BOARD_DIR))} && "
+                   f"export PATH={shlex.quote(':'.join(bin_dirs))}:\"$PATH\" && "
+                   f"cd {shlex.quote(ws_path)} && "
+                   f"{AGENT_CMDS[agent_id]} {shlex.quote(prompt)}")
+            subprocess.Popen(["tmux", "new-window", "-t", f"{TMUX_SESSION}:", "-n", slug, cmd])
+            windows = read_windows(); windows[task_id] = slug; write_windows(windows)
+            return self.send_json(200, {"ok": True, "task_id": task_id,
+                                        "workspace": ws_label, "immediate": True})
+
+        # Crear tarea programada via bt schedule
+        result = subprocess.run(
+            [str(BT), "schedule", title, scheduled_at,
+             "--workspace", workspace_id, "--owner", agent_id, "--desc", context],
+            capture_output=True, text=True,
+            env={**os.environ, "IT_BOARD_DIR": str(BOARD_DIR)}
+        )
+        task_id = None
+        for line in (result.stdout + result.stderr).splitlines():
+            if "programada:" in line:
+                task_id = line.split("programada:")[-1].strip().split("→")[0].strip()
+                break
+
+        if not task_id:
+            return self.send_json(500, {"error": "No se pudo crear la tarea programada",
+                                        "detail": result.stdout + result.stderr})
+
+        self.send_json(200, {"ok": True, "task_id": task_id,
+                             "workspace": ws_label, "scheduled_at": scheduled_at})
 
     def _done(self):
         length = int(self.headers.get("Content-Length", 0))
@@ -459,6 +670,10 @@ if __name__ == "__main__":
         ip = "?"
 
     ensure_board_layout()
+
+    # Lanzar scheduler de tareas programadas en background
+    t = threading.Thread(target=scheduler_loop, daemon=True)
+    t.start()
 
     HTTPServer.allow_reuse_address = True
     httpd = HTTPServer(("0.0.0.0", PORT), Handler)

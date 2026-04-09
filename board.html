@@ -63,6 +63,23 @@
   .badge-pending     { background:#1e2535; color:#94a3b8; }
   .badge-review      { background:#2d2012; color:#fb923c; }
   .badge-done        { background:#0f2d1f; color:#4ade80; }
+  .badge-scheduled   { background:#2d1f45; color:#c084fc; }
+
+  .sched-countdown {
+    display: inline-block; font-size: 11px; font-weight: 600;
+    color: #a78bfa; margin-left: 6px; white-space: nowrap;
+  }
+  .sched-countdown.overdue { color: #fbbf24; }
+
+  /* Toggle programar */
+  .btn-toggle-sched {
+    background: none; border: 1px dashed #334155; border-radius: 6px;
+    padding: 5px 12px; color: #64748b; font-size: 12px; cursor: pointer;
+    font-family: inherit; transition: border-color .15s, color .15s;
+    margin-bottom: 14px;
+  }
+  .btn-toggle-sched:hover { border-color: #a78bfa; color: #a78bfa; }
+  .btn-toggle-sched.active { border-color: #a78bfa; color: #a78bfa; background: #1e1535; }
 
   .empty { padding:14px; color:#334155; font-size:13px; font-style:italic; }
 
@@ -449,6 +466,8 @@ function renderTable(table) {
   const rows = table.dataRows.filter(r => !isPlaceholder(r));
   if (!rows.length) return `<div class="empty">Sin tareas</div>`;
 
+  const isScheduledSection = table.headers.some(h => h.toLowerCase().includes('programada para'));
+
   let h = `<div class="table-wrap"><table><thead><tr>`;
   table.headers.forEach(th => h += `<th>${th}</th>`);
   h += `</tr></thead><tbody>`;
@@ -461,10 +480,10 @@ function renderTable(table) {
     const status   = row[idx['estado'] ?? idx['status']] || '';
     const isDoneSection = idx['resultado breve'] !== undefined;
     const isActive = status.toLowerCase().replace(/\s/g,'_') === 'in_progress';
-    const showResponse = needsResponse(blocker);
-    const showIntervene = !!taskId && !isDoneSection && !showResponse;
-    const showLog = !!taskId;
-    const showTaskActions = !!taskId && !isDoneSection;
+    const showResponse  = needsResponse(blocker);
+    const showIntervene = !!taskId && !isDoneSection && !showResponse && !isScheduledSection;
+    const showLog       = !!taskId;
+    const showTaskActions = !!taskId && !isDoneSection && !isScheduledSection;
 
     h += `<tr>`;
     row.forEach((cell, i) => {
@@ -473,16 +492,23 @@ function renderTable(table) {
       if ((hdr==='estado'||hdr==='status') && isActive) {
         content += ` <button class="ping-btn" onclick="pingAgent('${taskId}',this)" title="Pedir actualización de estado">?</button>`;
       }
+      if (hdr === 'programada para' && cell && cell !== '—') {
+        content += `<span class="sched-countdown" data-scheduled="${cell}"></span>`;
+      }
       if (showResponse && hdr === 'bloqueador') {
         content += approvalBar(taskId, blocker);
       }
-      if (showIntervene && (hdr === 'actividad')) {
+      if (showIntervene && hdr === 'actividad') {
         content += `<div style="margin-top:4px">${interveneBar(taskId)}</div>`;
       }
-      if (showLog && (hdr === 'actualizado' || hdr === 'fecha')) {
-        content += `<br><button class="log-btn" data-log-btn="${taskId}" onclick="toggleLog('${taskId}')">▸ logs</button>`;
-        if (showTaskActions) {
-          content += taskActions(taskId, blockerMode(blocker) === 'close');
+      if (showLog && (hdr === 'actualizado' || hdr === 'fecha' || hdr === 'workspace')) {
+        if (hdr !== 'workspace' || isScheduledSection) {
+          content += `<br><button class="log-btn" data-log-btn="${taskId}" onclick="toggleLog('${taskId}')">▸ logs</button>`;
+          if (isScheduledSection && taskId) {
+            content += scheduledActions(taskId);
+          } else if (showTaskActions) {
+            content += taskActions(taskId, blockerMode(blocker) === 'close');
+          }
         }
       }
       h += `<td>${content}</td>`;
@@ -501,6 +527,7 @@ function renderCards(table) {
   const rows = table.dataRows.filter(r => !isPlaceholder(r));
   if (!rows.length) return `<div class="cards"><div class="empty">Sin tareas</div></div>`;
 
+  const isScheduledSection = table.headers.some(h => h.toLowerCase().includes('programada para'));
   const idx = {};
   table.headers.forEach((h,i) => idx[h.toLowerCase()] = i);
 
@@ -515,34 +542,36 @@ function renderCards(table) {
     const owner    = get(row, 'owner');
     const status   = get(row, 'estado', 'status');
     const date     = get(row, 'actualizado', 'fecha');
+    const schedAt  = get(row, 'programada para');
     const extra    = get(row, 'resultado breve', 'bloqueador');
     const activity = get(row, 'actividad');
     const blocker  = get(row, 'bloqueador');
     const taskId   = row[0] || '';
-    const isDoneSection = idx['resultado breve'] !== undefined;
-    const showResponse   = needsResponse(blocker);
-    const isActiveCard   = (status||'').toLowerCase().replace(/\s/g,'_') === 'in_progress';
-    const showIntervene  = !!taskId && !isDoneSection && !showResponse;
-    const showTaskActions = !!taskId && !isDoneSection;
+    const isDoneSection   = idx['resultado breve'] !== undefined;
+    const showResponse    = needsResponse(blocker);
+    const isActiveCard    = (status||'').toLowerCase().replace(/\s/g,'_') === 'in_progress';
+    const showIntervene   = !!taskId && !isDoneSection && !showResponse && !isScheduledSection;
+    const showTaskActions = !!taskId && !isDoneSection && !isScheduledSection;
 
     const tid = `t${Math.random().toString(36).slice(2)}`;
     h += `<div class="card">
       <div class="card-top">
         <div class="card-title clamped" id="${tid}">${title}</div>
         <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">
-          ${status ? badge(status) : ''}
+          ${isScheduledSection ? `<span class="badge badge-scheduled">programada</span>` : (status ? badge(status) : '')}
           ${isActiveCard ? `<button class="ping-btn" onclick="pingAgent('${taskId}',this)" title="Pedir actualización">?</button>` : ''}
         </div>
       </div>
       <button class="ver-mas" onclick="toggleVerMas(this,'${tid}')">ver más</button>
       <div class="card-meta">
         ${owner ? `<span data-label="owner">${owner}</span>` : ''}
-        ${date  ? `<span data-label="fecha">${date}</span>`  : ''}
+        ${schedAt ? `<span data-label="programada">${schedAt}<span class="sched-countdown" data-scheduled="${schedAt}"></span></span>` : (date ? `<span data-label="fecha">${date}</span>` : '')}
       </div>
       ${activity ? `<div class="card-activity">${activity}</div>` : ''}
-      ${extra && !activity ? (() => { const rid = `r${Math.random().toString(36).slice(2)}`; return `<div class="card-result clamped" id="${rid}">${extra}</div><button class="ver-mas" onclick="toggleVerMas(this,'${rid}')">ver más</button>`; })() : ''}
+      ${extra && !activity && !isScheduledSection ? (() => { const rid = `r${Math.random().toString(36).slice(2)}`; return `<div class="card-result clamped" id="${rid}">${extra}</div><button class="ver-mas" onclick="toggleVerMas(this,'${rid}')">ver más</button>`; })() : ''}
       ${showResponse ? approvalBar(taskId, blocker) : ''}
       ${showIntervene ? interveneBar(taskId) : ''}
+      ${isScheduledSection && taskId ? scheduledActions(taskId) : ''}
       ${showTaskActions ? taskActions(taskId, blockerMode(blocker) === 'close') : ''}
       ${taskId ? `<div class="card-log"><button class="log-btn" data-log-btn="${taskId}" onclick="toggleLog('${taskId}')">▸ logs</button><pre data-log-panel="${taskId}" class="log-content" style="display:none">cargando…</pre></div>` : ''}
     </div>`;
@@ -565,7 +594,7 @@ function parseSections(md) {
 
 function renderBoard(md) {
   const sections = parseSections(md);
-  const order = ['Activas','En revisión','Bloqueadas','Completadas'];
+  const order = ['Programadas','Activas','En revisión','Bloqueadas','Completadas'];
   const shown = new Set();
   let html = '';
 
@@ -578,6 +607,9 @@ function renderBoard(md) {
     const table  = tlines.length >= 3 ? parseTable(tlines) : null;
     const count  = table ? table.dataRows.filter(r => !isPlaceholder(r)).length : 0;
 
+    // Ocultar sección Programadas si no hay tareas
+    if (sec.title.toLowerCase().includes('programada') && count === 0) return;
+
     html += `<div class="section">
       <div class="section-header">
         <span class="section-title">${sec.title}</span>
@@ -587,7 +619,9 @@ function renderBoard(md) {
       ${renderCards(table)}
     </div>`;
 
-    if (sec.title.toLowerCase().includes('bloqueada') || sec.title.toLowerCase().includes('revisión')) {
+    if (sec.title.toLowerCase().includes('programada') ||
+        sec.title.toLowerCase().includes('bloqueada') ||
+        sec.title.toLowerCase().includes('revisión')) {
       html += `<hr class="divider">`;
     }
   });
@@ -661,6 +695,7 @@ async function refresh() {
     document.getElementById('board').innerHTML = renderBoard(await r.text());
     requestAnimationFrame(pruneVerMas);
     restoreLogPanels();
+    updateCountdowns();
 
     // Restaurar valores guardados
     document.querySelectorAll('.approval-input').forEach(el => {
@@ -689,6 +724,9 @@ async function refresh() {
 setInterval(() => {
   for (const taskId of logPanels) fetchTaskLog(taskId);
 }, 2000);
+
+// Actualizar countdowns de tareas programadas cada 30s
+setInterval(updateCountdowns, 30000);
 
 function toggleVerMas(btn, id) {
   const el = document.getElementById(id);
@@ -864,6 +902,40 @@ async function cancelTask(taskId, containerId) {
   }
 }
 
+// ── Scheduled tasks ─────────────────────────────────────────────────────────
+
+function scheduledActions(taskId) {
+  const aid = 'sca' + Math.random().toString(36).slice(2);
+  return `<div class="task-actions" id="${aid}">
+    <button class="task-action-btn task-action-cancel" onclick="cancelTask('${taskId}','${aid}')">✕ Cancelar</button>
+  </div>`;
+}
+
+function updateCountdowns() {
+  document.querySelectorAll('.sched-countdown[data-scheduled]').forEach(el => {
+    const raw = el.dataset.scheduled;
+    if (!raw || raw === '—') return;
+    const dt   = new Date(raw.replace(' ', 'T'));
+    const diff = dt - Date.now();
+    if (isNaN(diff)) return;
+    if (diff <= 0) {
+      el.textContent = ' (lanzando…)';
+      el.className = 'sched-countdown overdue';
+    } else {
+      const totalMins = Math.floor(diff / 60000);
+      const hours = Math.floor(totalMins / 60);
+      const days  = Math.floor(hours / 24);
+      let label;
+      if (days > 0)        label = `en ${days}d ${hours % 24}h`;
+      else if (hours > 0)  label = `en ${hours}h ${totalMins % 60}m`;
+      else if (totalMins > 0) label = `en ${totalMins}m`;
+      else                 label = 'en breve';
+      el.textContent = ` · ${label}`;
+      el.className = 'sched-countdown';
+    }
+  });
+}
+
 // ── Config & Dispatch modal ──────────────────────────────────────────────────
 
 let _config = null;
@@ -907,6 +979,13 @@ function closeModal() {
   document.getElementById('dispatch-msg').className = '';
   document.getElementById('btn-dispatch').disabled = false;
   document.getElementById('btn-dispatch').textContent = 'Lanzar agente';
+  // Reset scheduled field
+  const schedField = document.getElementById('field-scheduled');
+  const schedInput = document.getElementById('dispatch-scheduled');
+  const schedToggle = document.getElementById('btn-toggle-sched');
+  if (schedField)  schedField.style.display = 'none';
+  if (schedInput)  schedInput.value = '';
+  if (schedToggle) { schedToggle.classList.remove('active'); schedToggle.textContent = '⏰ Programar para más tarde'; }
 }
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -919,10 +998,33 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 });
 
+function toggleSchedule() {
+  const field  = document.getElementById('field-scheduled');
+  const toggle = document.getElementById('btn-toggle-sched');
+  const input  = document.getElementById('dispatch-scheduled');
+  const btn    = document.getElementById('btn-dispatch');
+  const visible = field.style.display !== 'none';
+  field.style.display = visible ? 'none' : '';
+  toggle.classList.toggle('active', !visible);
+  toggle.textContent = visible ? '⏰ Programar para más tarde' : '⏰ Lanzar ahora';
+  btn.textContent = visible ? 'Lanzar agente' : 'Programar tarea';
+  if (!visible) {
+    // Pre-rellenar con mañana a las 9:00
+    const t = new Date(); t.setDate(t.getDate() + 1); t.setHours(9, 0, 0, 0);
+    input.value = t.toISOString().slice(0,16);
+    input.focus();
+  } else {
+    input.value = '';
+  }
+}
+
 async function dispatchTask() {
   const context   = document.getElementById('dispatch-context').value.trim();
   const workspace = document.getElementById('dispatch-workspace').value;
   const agent     = document.getElementById('dispatch-agent').value;
+  const schedEl   = document.getElementById('dispatch-scheduled');
+  const schedVal  = (schedEl && document.getElementById('field-scheduled').style.display !== 'none')
+                    ? schedEl.value.trim() : '';
   const msg       = document.getElementById('dispatch-msg');
   const btn       = document.getElementById('btn-dispatch');
 
@@ -932,34 +1034,46 @@ async function dispatchTask() {
     return;
   }
 
+  // Convertir "2026-04-09T14:00" → "2026-04-09 14:00"
+  const scheduledAt = schedVal ? schedVal.replace('T', ' ') : '';
+  const endpoint = scheduledAt ? '/api/schedule' : '/api/dispatch';
+  const payload  = { context, workspace, agent };
+  if (scheduledAt) payload.scheduled_at = scheduledAt;
+
   btn.disabled = true;
-  btn.textContent = 'Lanzando…';
+  btn.textContent = scheduledAt ? 'Programando…' : 'Lanzando…';
   msg.textContent = '';
   msg.className = '';
 
   try {
-    const r = await fetch('/api/dispatch', {
+    const r = await fetch(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ context, workspace, agent }),
+      body: JSON.stringify(payload),
     });
     const data = await r.json();
     if (data.ok) {
-      msg.textContent = `✓ ${data.task_id} → ${data.workspace}`;
+      if (data.immediate) {
+        msg.textContent = `✓ ${data.task_id} → ${data.workspace} (lanzada ahora)`;
+      } else if (data.scheduled_at) {
+        msg.textContent = `✓ ${data.task_id} programada para ${data.scheduled_at}`;
+      } else {
+        msg.textContent = `✓ ${data.task_id} → ${data.workspace}`;
+      }
       msg.className = 'ok';
-      setTimeout(closeModal, 2000);
+      setTimeout(closeModal, 2500);
       setTimeout(refresh, 600);
     } else {
       msg.textContent = `Error: ${data.error || 'desconocido'}`;
       msg.className = 'err';
       btn.disabled = false;
-      btn.textContent = 'Lanzar agente';
+      btn.textContent = scheduledAt ? 'Programar tarea' : 'Lanzar agente';
     }
   } catch (e) {
     msg.textContent = `Error de red: ${e.message}`;
     msg.className = 'err';
     btn.disabled = false;
-    btn.textContent = 'Lanzar agente';
+    btn.textContent = scheduledAt ? 'Programar tarea' : 'Lanzar agente';
   }
 }
 </script>
@@ -986,6 +1100,11 @@ async function dispatchTask() {
       <textarea id="dispatch-context" rows="4"
                 placeholder="ej: revisar inbox de juan.burgos y archivar todo lo que no sea accionable"
                 onkeydown="if(event.key==='Enter'&&(event.metaKey||event.ctrlKey))dispatchTask()"></textarea>
+    </div>
+    <button id="btn-toggle-sched" class="btn-toggle-sched" onclick="toggleSchedule()">⏰ Programar para más tarde</button>
+    <div class="field" id="field-scheduled" style="display:none">
+      <label>Lanzar en</label>
+      <input type="datetime-local" id="dispatch-scheduled" step="60">
     </div>
     <div id="dispatch-msg"></div>
     <div class="modal-actions">
