@@ -7,3 +7,5 @@ para-revisar/*
 !para-revisar/viewer.html
 *.pyc
 __pycache__/
+server.log
+.playwright-mcp/
