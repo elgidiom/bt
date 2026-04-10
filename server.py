@@ -254,6 +254,28 @@ def dispatch_task_by_id(task_id: str):
     write_windows(windows)
 
 
+def sync_board_if_needed():
+    """Llama a bt sync si algún task file es más nuevo que board.md."""
+    board_file = BOARD_DIR / "board.md"
+    tasks_dir  = BOARD_DIR / "tasks"
+    if not board_file.exists() or not tasks_dir.exists():
+        return
+    try:
+        board_mtime = board_file.stat().st_mtime
+        needs_sync  = any(
+            f.stat().st_mtime > board_mtime
+            for f in tasks_dir.glob("task-*.md")
+        )
+        if needs_sync:
+            subprocess.run(
+                [str(BT), "sync"],
+                capture_output=True, text=True,
+                env={**os.environ, "IT_BOARD_DIR": str(BOARD_DIR)}
+            )
+    except Exception:
+        pass
+
+
 def check_scheduled_tasks():
     """Revisa tareas con Status: scheduled cuya hora ya llegó y las lanza."""
     tasks_dir = BOARD_DIR / "tasks"
@@ -313,6 +335,9 @@ class Handler(BaseHTTPRequestHandler):
         # Archivos estáticos desde BOARD_DIR
         if not path or path == "board.html":
             path = "board.html"
+
+        if path == "board.md":
+            sync_board_if_needed()
 
         try:
             target = (BOARD_DIR / path).resolve()
