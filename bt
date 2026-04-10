@@ -130,7 +130,9 @@ S_COMPLETADAS = "Completadas"
 S_PROGRAMADAS = "Programadas"
 
 def trow(cols):
-    return "| " + " | ".join(str(c) for c in cols) + " |"
+    # Sanitizar: las celdas no pueden tener saltos de línea ni pipes literales
+    safe = [str(c).replace('\n', ' ').replace('\r', '').replace('|', '｜') for c in cols]
+    return "| " + " | ".join(safe) + " |"
 
 def parse_row(line):
     return [c.strip() for c in line.split("|")[1:-1]]
@@ -666,6 +668,125 @@ def cmd_show(args):
         return
     print(path.read_text(), end="")
 
+def cmd_sync(args=None):
+    """bt sync — sincroniza board.md con el estado real de los archivos de tarea."""
+    if not TASKS_DIR.exists() or not BOARD_FILE.exists():
+        return
+
+    STATUS_TO_SECTION = {
+        "scheduled":   S_PROGRAMADAS,
+        "pending":     S_ACTIVAS,
+        "in_progress": S_ACTIVAS,
+        "blocked":     S_BLOQUEADAS,
+        "done":        S_COMPLETADAS,
+        "cancelled":   S_COMPLETADAS,
+        "canceled":    S_COMPLETADAS,
+    }
+
+    def read_task_data(path):
+        content = path.read_text()
+        tid = path.stem
+        data = {"tid": tid, "status": "pending", "title": tid, "owner": "—",
+                "blocker": "—", "date": today(), "scheduled": "", "workspace": "",
+                "activity": "", "result": "—"}
+        for line in content.splitlines():
+            if   line.startswith("Status: "):      data["status"]    = line[8:].strip()
+            elif line.startswith("Owner: "):       data["owner"]     = line[7:].strip()
+            elif line.startswith("Date: "):        data["date"]      = line[6:].strip()
+            elif line.startswith("Scheduled: "):   data["scheduled"] = line[11:].strip()
+            elif line.startswith("Workspace: "):   data["workspace"] = line[11:].strip()
+            elif line.startswith("# ") and " — " in line:
+                data["title"] = line.split(" — ", 1)[1].strip()
+        # Blocker
+        in_sec = False
+        for line in content.splitlines():
+            if line.strip() == "## Bloqueadores":
+                in_sec = True; continue
+            if in_sec:
+                if line.startswith("## "): break
+                s = line.strip()
+                if s and s != "ninguno":
+                    data["blocker"] = s; break
+        # Last progress entry → activity
+        last_p = ""
+        in_sec = False
+        for line in content.splitlines():
+            if line.strip() == "## Progreso":
+                in_sec = True; continue
+            if in_sec:
+                if line.startswith("## "): break
+                if line.strip().startswith("- "):
+                    last_p = line.strip()[2:].strip()
+        if last_p:
+            data["activity"] = re.sub(r'^\d{4}-\d{2}-\d{2}(?: \d{2}:\d{2})? — ', '', last_p)
+        # Result
+        in_sec = False
+        for line in content.splitlines():
+            if line.strip() == "## Resultado":
+                in_sec = True; continue
+            if in_sec:
+                if line.startswith("## "): break
+                s = line.strip()
+                if s and s != "(completar al cerrar)":
+                    data["result"] = s; break
+        return data
+
+    lines = BOARD_FILE.read_text().splitlines()
+
+    # Map tid → sección actual en board.md
+    task_location = {}
+    for i, line in enumerate(lines):
+        if not line.strip().startswith('|'): continue
+        cols = parse_row(line)
+        if not cols or not cols[0].startswith("task-"): continue
+        sec = next((re.match(r'^## (.+)', lines[j]).group(1).strip()
+                    for j in range(i-1, -1, -1) if re.match(r'^## ', lines[j])), None)
+        if sec:
+            task_location[cols[0]] = sec
+
+    moved = 0
+    for f in sorted(TASKS_DIR.glob("task-*.md")):
+        try:
+            data = read_task_data(f)
+            tid = data["tid"]
+            expected = STATUS_TO_SECTION.get(data["status"])
+            if not expected: continue
+            current = task_location.get(tid)
+            if not current: continue  # no está en el board
+
+            # Mismo matching parcial que usa find_section/renderBoard
+            if expected.split()[0].lower() in current.lower(): continue
+
+            # Mover a la sección correcta
+            lines, old, _ = remove_row(lines, tid)
+            if old is None: continue
+
+            title = data["title"][:60]
+            owner = data["owner"]
+
+            if expected == S_BLOQUEADAS:
+                lines = add_row(lines, S_BLOQUEADAS,
+                                [tid, title, owner, data["blocker"][:200], today()])
+            elif expected == S_ACTIVAS:
+                lines = add_row(lines, S_ACTIVAS,
+                                [tid, title, owner, data["status"], data["activity"][:200], today()])
+            elif expected == S_COMPLETADAS:
+                lines = add_row(lines, S_COMPLETADAS,
+                                [tid, title, owner, data["result"][:200], data["date"]])
+            elif expected == S_PROGRAMADAS:
+                lines = add_row(lines, S_PROGRAMADAS,
+                                [tid, title, owner, data["scheduled"], data["workspace"]])
+            moved += 1
+        except Exception:
+            pass
+
+    BOARD_FILE.write_text("\n".join(lines) + "\n")
+    if moved:
+        print(f"✓ sync — {moved} tarea(s) corregida(s)")
+    else:
+        print("✓ sync — board al día")
+
+
 def cmd_serve(args):
     """bt serve — levanta el servidor HTTP del board"""
     import socket, signal
@@ -732,6 +853,7 @@ CMDS = {
     "ls":       cmd_ls,
     "show":     cmd_show,
     "status":   cmd_status,
+    "sync":     cmd_sync,
     "serve":    cmd_serve,
 }
 
@@ -751,6 +873,7 @@ def main():
         print("  bt ls [pending|in_progress|blocked|scheduled|done|all]")
         print("  bt show <id>")
         print("  bt status")
+        print("  bt sync                        # corrige secciones desincronizadas en board.md")
         print("  bt serve [--port N] [--restart]")
         print(f"\nBoard: {BOARD_FILE}")
         return
