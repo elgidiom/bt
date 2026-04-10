@@ -8,7 +8,9 @@ Este documento aplica a **todos los agentes** lanzados desde el board, sin impor
 
 `bt` es el CLI central para gestionar tareas. Vive en este repo y puede exponerse opcionalmente en `PATH` con `install.sh --link`. Escribe al board en el directorio resuelto por `IT_BOARD_DIR` o, por defecto, en el directorio real del script.
 
-**NUNCA** editar `board.md` a mano. **NUNCA** usar TaskCreate de Claude. **SIEMPRE** `bt`.
+**NUNCA** editar `board.md` directamente (ni con Edit, ni con Write, ni con sed, ni de ninguna otra forma). **NUNCA** usar TaskCreate de Claude. **SIEMPRE** `bt`.
+
+> **Por qué importa:** `board.md` es una tabla markdown. Si se edita directo con contenido multilinea o pipes (`|`) en el texto, la fila queda malformada y el board deja de mostrar los botones y logs para esa tarea. `bt` sanitiza y trunca los valores antes de escribir — úsalo siempre.
 
 ### Comandos
 
