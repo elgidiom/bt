@@ -245,14 +245,50 @@
   }
   .log-btn:hover { border-color: #60a5fa; color: #60a5fa; }
   .log-row td { padding: 0 12px 10px 28px !important; }
-  .log-content {
+
+  .log-timeline {
     background: #0a0d14; border: 1px solid #1e2535; border-radius: 6px;
-    padding: 10px 12px; font-size: 11px; font-family: monospace;
-    color: #94a3b8; white-space: pre-wrap; line-height: 1.6;
-    max-height: 200px; overflow-y: auto;
+    padding: 12px 14px; max-height: 280px; overflow-y: auto;
   }
   .card-log { margin-top: 8px; }
-  .card-log .log-content { max-height: 160px; }
+  .card-log .log-timeline { max-height: 220px; }
+
+  .log-entry {
+    display: flex; gap: 10px;
+  }
+  .log-stem {
+    display: flex; flex-direction: column; align-items: center;
+    flex-shrink: 0; width: 14px;
+  }
+  .log-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: #334155; flex-shrink: 0; margin-top: 4px;
+  }
+  .log-connector {
+    width: 1px; flex: 1; background: #1e2535; min-height: 10px; margin: 3px 0 0;
+  }
+  .log-body { flex: 1; padding-bottom: 10px; min-width: 0; }
+  .log-time {
+    font-size: 10px; color: #475569; font-family: monospace; margin-bottom: 2px;
+  }
+  .log-msg {
+    font-size: 11px; color: #94a3b8; line-height: 1.55; word-break: break-word;
+  }
+  .log-empty { font-size: 11px; color: #334155; font-style: italic; }
+  .log-loading { font-size: 11px; color: #334155; }
+
+  /* Color-coding by event type */
+  .log-created .log-dot  { background: #a78bfa; }
+  .log-done    .log-dot  { background: #4ade80; }
+  .log-done    .log-msg  { color: #4ade80; }
+  .log-proposed .log-dot { background: #34d399; }
+  .log-proposed .log-msg { color: #86efac; }
+  .log-user    .log-dot  { background: #60a5fa; }
+  .log-user    .log-msg  { color: #93c5fd; }
+  .log-blocked .log-dot  { background: #fbbf24; }
+  .log-blocked .log-msg  { color: #fcd34d; }
+  .log-error   .log-dot  { background: #f87171; }
+  .log-error   .log-msg  { color: #fca5a5; }
 
   .cards { display: none; }
 
@@ -515,7 +551,7 @@ function renderTable(table) {
     });
     h += `</tr>`;
     if (showLog) {
-      h += `<tr class="log-row" data-log-row="${taskId}" style="display:none"><td colspan="${table.headers.length}"><pre data-log-panel="${taskId}" class="log-content">cargando…</pre></td></tr>`;
+      h += `<tr class="log-row" data-log-row="${taskId}" style="display:none"><td colspan="${table.headers.length}"><div data-log-panel="${taskId}" class="log-timeline"><div class="log-loading">cargando…</div></div></td></tr>`;
     }
   });
   return h + `</tbody></table></div>`;
@@ -573,7 +609,7 @@ function renderCards(table) {
       ${showIntervene ? interveneBar(taskId) : ''}
       ${isScheduledSection && taskId ? scheduledActions(taskId) : ''}
       ${showTaskActions ? taskActions(taskId, blockerMode(blocker) === 'close') : ''}
-      ${taskId ? `<div class="card-log"><button class="log-btn" data-log-btn="${taskId}" onclick="toggleLog('${taskId}')">▸ logs</button><pre data-log-panel="${taskId}" class="log-content" style="display:none">cargando…</pre></div>` : ''}
+      ${taskId ? `<div class="card-log"><button class="log-btn" data-log-btn="${taskId}" onclick="toggleLog('${taskId}')">▸ logs</button><div data-log-panel="${taskId}" class="log-timeline" style="display:none"><div class="log-loading">cargando…</div></div></div>` : ''}
     </div>`;
   });
   return h + `</div>`;
@@ -628,6 +664,52 @@ function renderBoard(md) {
   return html;
 }
 
+function renderLog(text) {
+  if (!text || text === '(sin logs aún)') return `<div class="log-empty">sin logs aún</div>`;
+
+  const lines = text.split('\n');
+  const entries = [];
+
+  for (const line of lines) {
+    const m = line.match(/^-\s*(\d{4}-\d{2}-\d{2})\s+(\d{2}:\d{2})\s*[—\-–]\s*(.+)$/);
+    if (m) {
+      entries.push({ date: m[1], time: m[2], msg: m[3] });
+    }
+  }
+
+  if (!entries.length) {
+    // fallback: texto sin formato
+    const safe = text.replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    return `<div class="log-msg" style="font-size:11px;white-space:pre-wrap;">${safe}</div>`;
+  }
+
+  // Newest first
+  entries.reverse();
+
+  return entries.map((e, i) => {
+    const isLast = i === entries.length - 1;
+    const msg = e.msg.toLowerCase();
+    let cls = '';
+    if (msg.includes('tarea creada'))                            cls = 'log-created';
+    else if (msg.startsWith('completada'))                       cls = 'log-done';
+    else if (msg.startsWith('resultado propuesto'))              cls = 'log-proposed';
+    else if (msg.startsWith('input del usuario') || msg.startsWith('usuario ')) cls = 'log-user';
+    else if (msg.includes('error') || msg.includes('falló') || msg.includes('fallo')) cls = 'log-error';
+    else if (msg.includes('esperando') || msg.includes('bloqueado')) cls = 'log-blocked';
+
+    const connector = isLast ? '' : '<div class="log-connector"></div>';
+    const dateShort = e.date.slice(5); // MM-DD
+    const safeMsg = e.msg.replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    return `<div class="log-entry ${cls}">
+      <div class="log-stem"><div class="log-dot"></div>${connector}</div>
+      <div class="log-body">
+        <div class="log-time">${dateShort} · ${e.time}</div>
+        <div class="log-msg">${safeMsg}</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
 async function fetchTaskLog(taskId) {
   try {
     const r = await fetch(`/api/task/${taskId}/progress?t=${Date.now()}`);
@@ -635,7 +717,7 @@ async function fetchTaskLog(taskId) {
     const d = await r.json();
     logCache[taskId] = d.progress || '(sin logs aún)';
     document.querySelectorAll(`[data-log-panel="${taskId}"]`).forEach(el => {
-      el.textContent = logCache[taskId];
+      el.innerHTML = renderLog(logCache[taskId]);
     });
   } catch {}
 }
@@ -665,7 +747,7 @@ function restoreLogPanels() {
     });
     document.querySelectorAll(`[data-log-panel="${taskId}"]`).forEach(panel => {
       panel.style.display = 'block';
-      panel.textContent = logCache[taskId] || 'cargando…';
+      panel.innerHTML = logCache[taskId] ? renderLog(logCache[taskId]) : '<div class="log-loading">cargando…</div>';
     });
     document.querySelectorAll(`[data-log-btn="${taskId}"]`).forEach(btn => btn.textContent = '▾ logs');
   }
