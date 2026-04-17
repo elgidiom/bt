@@ -133,15 +133,24 @@ def find_tmux_window(slug):
             return parts[0]
     return None
 
+def inbox_path(tid):
+    return TASKS_DIR / f"{tid}.inbox.md"
+
+def write_inbox(to_task, body):
+    path = inbox_path(to_task)
+    with open(path, 'a') as f:
+        f.write(f"[{now()}]\n{body}\n\n---\n\n")
+
 def notify_task_terminal(task_id, message):
+    """Escribe al inbox del agente (siempre) y envía ping corto vía tmux (best-effort)."""
+    write_inbox(task_id, message)
     slug = read_windows().get(task_id) or task_id.replace("task-", "")[-22:]
     window_idx = find_tmux_window(slug)
     if window_idx is None:
-        return False, f"ventana tmux no encontrada para {task_id}"
+        return False, f"inbox escrito; ventana tmux no encontrada para {task_id}"
     target = f"{TMUX_SESSION}:{window_idx}"
-    # -l envía el texto literalmente; sin -l, tmux interpreta chars como [ ] → como secuencias de tecla
     r1 = subprocess.run(
-        ["tmux", "send-keys", "-t", target, "-l", message],
+        ["tmux", "send-keys", "-t", target, "-l", f"[bt] tienes mensajes — bt inbox {task_id}"],
         capture_output=True, text=True
     )
     r2 = subprocess.run(
@@ -149,7 +158,7 @@ def notify_task_terminal(task_id, message):
         capture_output=True, text=True
     )
     if r1.returncode != 0 or r2.returncode != 0:
-        detail = ((r1.stderr or r1.stdout or "") + (r2.stderr or r2.stdout or "") or "tmux send-keys falló").strip()
+        detail = ((r1.stderr or r1.stdout or "") + (r2.stderr or r2.stdout or "") or "tmux ping falló").strip()
         return False, detail
     return True, window_idx
 
@@ -1199,6 +1208,23 @@ def cmd_serve(args):
     except KeyboardInterrupt:
         pass
 
+def cmd_inbox(args):
+    """bt inbox <task-id> — muestra mensajes no leídos y limpia el inbox (atómico)."""
+    if not args:
+        return print("Uso: bt inbox <task-id>")
+    if not (tid := resolve_id(args[0])):
+        return
+    path = inbox_path(tid)
+    if not path.exists() or not path.read_text().strip():
+        print(f"inbox vacío — {tid}")
+        return
+    content = path.read_text().strip()
+    msgs = [m.strip() for m in content.split("---") if m.strip()]
+    print(content)
+    print()
+    path.write_text("")
+    print(f"✓ {len(msgs)} mensaje(s) leído(s) — inbox limpiado")
+
 # ── main ──────────────────────────────────────────────────────────────────────
 
 CMDS = {
@@ -1211,6 +1237,7 @@ CMDS = {
     "finalize": cmd_finalize,
     "revisar":  cmd_revisar,
     "session":  cmd_session,
+    "inbox":    cmd_inbox,
     "ls":       cmd_ls,
     "show":     cmd_show,
     "status":   cmd_status,
@@ -1237,6 +1264,7 @@ def main():
         print("  bt session close <mi_tarea> <otra_tarea> \"motivo\"")
         print("  bt session msg <desde> <hacia> \"mensaje\"")
         print("  bt session ls [<task>]")
+        print("  bt inbox <task-id>             # mensajes no leídos (limpia al leer)")
         print("  bt ls [pending|in_progress|blocked|scheduled|done|all]")
         print("  bt show <id>")
         print("  bt status")
