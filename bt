@@ -647,6 +647,7 @@ def cmd_finalize(args):
             return
 
     _finalize_task(tid, result)
+    write_inbox(tid, f"[bt/finalize] tu tarea fue aprobada y cerrada.\nResultado: {result}")
 
 def cmd_schedule(args):
     """bt schedule "titulo" "YYYY-MM-DD HH:MM" [--owner X] [--workspace X] [--desc "..."]"""
@@ -1208,6 +1209,17 @@ def cmd_serve(args):
     except KeyboardInterrupt:
         pass
 
+def cmd_tell(args):
+    """bt tell <task-id> "mensaje" — escribe al inbox del agente sin sesión."""
+    if len(args) < 2:
+        return print('Uso: bt tell <task-id> "mensaje"')
+    if not (tid := resolve_id(args[0])):
+        return
+    message = " ".join(args[1:])
+    write_inbox(tid, f"[bt/tell] {message}")
+    task_append_progress(tid, f"mensaje del usuario: {message}")
+    print(f"✓ mensaje entregado al inbox de {tid}")
+
 def cmd_inbox(args):
     """bt inbox <task-id> — muestra mensajes no leídos y limpia el inbox (atómico)."""
     if not args:
@@ -1237,6 +1249,7 @@ CMDS = {
     "finalize": cmd_finalize,
     "revisar":  cmd_revisar,
     "session":  cmd_session,
+    "tell":     cmd_tell,
     "inbox":    cmd_inbox,
     "ls":       cmd_ls,
     "show":     cmd_show,
@@ -1264,6 +1277,7 @@ def main():
         print("  bt session close <mi_tarea> <otra_tarea> \"motivo\"")
         print("  bt session msg <desde> <hacia> \"mensaje\"")
         print("  bt session ls [<task>]")
+        print("  bt tell <task-id> \"mensaje\"     # escribe al inbox del agente (sin sesión)")
         print("  bt inbox <task-id>             # mensajes no leídos (limpia al leer)")
         print("  bt ls [pending|in_progress|blocked|scheduled|done|all]")
         print("  bt show <id>")
