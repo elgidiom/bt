@@ -14,6 +14,7 @@ A minimal task board for running AI agents locally. Agents log progress, request
 - `server.py` serves the board and dispatches tasks to agents via `tmux`
 - `board.html` is the UI
 - Task files live in `./tasks/`
+- Agent-to-agent session state lives in `./agent_sessions.json`
 - Review artifacts live in `./para-revisar/`
 
 ## Requirements
@@ -102,11 +103,55 @@ bt log <id> "message"
 bt block <id> "reason"
 bt done <id> "result"
 bt revisar <file> "title" "note" [--task X]
+bt session request <from> <to> "reason"
+bt session approve <my_task> <peer_task>
+bt session reject <my_task> <peer_task> "reason"
+bt session close <my_task> <peer_task> "reason"
+bt session msg <from> <to> "message"
+bt session ls [task]
 bt ls [pending|in_progress|blocked|done|all]
 bt show <id>
 bt status
 bt serve [--port N] [--restart]
 ```
+
+## Agent sessions
+
+Use agent sessions when two agents need to coordinate without collapsing their work into a single task row.
+
+Flow:
+
+1. Agent A asks for a channel:
+
+```bash
+bt session request task-a task-b "necesito pasarte hallazgos del mismo incidente"
+```
+
+2. Agent B explicitly approves:
+
+```bash
+bt session approve task-b task-a
+```
+
+3. Once active, both sides can exchange messages that are:
+
+- appended to both task logs for auditability
+- delivered live to the other agent's tmux window when available
+- visible later via `bt show <task>`
+
+Example:
+
+```bash
+bt session msg task-a task-b "ya confirmé que el error viene del webhook"
+```
+
+To stop the channel:
+
+```bash
+bt session close task-a task-b "handoff completo"
+```
+
+If one of the linked tasks is finalized, `bt` closes any active/pending session automatically so no stale channel remains.
 
 ## What is still intentionally local
 

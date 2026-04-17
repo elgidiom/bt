@@ -17,6 +17,7 @@ TASKS_DIR     = BOARD_DIR / "tasks"
 REVISAR_DIR   = BOARD_DIR / "para-revisar"
 MANIFEST_FILE = REVISAR_DIR / "manifest.json"
 WINDOWS_FILE  = BOARD_DIR / "windows.json"
+SESSIONS_FILE = BOARD_DIR / "agent_sessions.json"
 TMUX_SESSION  = os.environ.get("IT_TMUX_SESSION", "bt-agents")
 
 BOARD_TEMPLATE = """# Board — IT Agents
@@ -94,6 +95,19 @@ def read_windows():
 def write_windows(data):
     WINDOWS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
 
+def read_sessions():
+    try:
+        if SESSIONS_FILE.exists():
+            data = json.loads(SESSIONS_FILE.read_text())
+            if isinstance(data, dict) and isinstance(data.get("sessions"), dict):
+                return data
+    except Exception:
+        pass
+    return {"sessions": {}}
+
+def write_sessions(data):
+    SESSIONS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+
 def ensure_board_layout():
     BOARD_DIR.mkdir(parents=True, exist_ok=True)
     TASKS_DIR.mkdir(parents=True, exist_ok=True)
@@ -102,9 +116,134 @@ def ensure_board_layout():
         BOARD_FILE.write_text(BOARD_TEMPLATE)
     if not WINDOWS_FILE.exists():
         WINDOWS_FILE.write_text("{}\n")
+    if not SESSIONS_FILE.exists():
+        SESSIONS_FILE.write_text('{"sessions":{}}\n')
     if not MANIFEST_FILE.exists():
         MANIFEST_FILE.write_text('{"items":[]}\n')
     _ensure_programadas_section()
+
+def find_tmux_window(slug):
+    r = subprocess.run(
+        ["tmux", "list-windows", "-t", TMUX_SESSION, "-F", "#{window_index} #{window_name}"],
+        capture_output=True, text=True
+    )
+    for line in r.stdout.splitlines():
+        parts = line.split(" ", 1)
+        if len(parts) == 2 and slug in parts[1]:
+            return parts[0]
+    return None
+
+def notify_task_terminal(task_id, message):
+    slug = read_windows().get(task_id) or task_id.replace("task-", "")[-22:]
+    window_idx = find_tmux_window(slug)
+    if window_idx is None:
+        return False, f"ventana tmux no encontrada para {task_id}"
+    target = f"{TMUX_SESSION}:{window_idx}"
+    # -l envía el texto literalmente; sin -l, tmux interpreta chars como [ ] → como secuencias de tecla
+    r1 = subprocess.run(
+        ["tmux", "send-keys", "-t", target, "-l", message],
+        capture_output=True, text=True
+    )
+    r2 = subprocess.run(
+        ["tmux", "send-keys", "-t", target, "Enter"],
+        capture_output=True, text=True
+    )
+    if r1.returncode != 0 or r2.returncode != 0:
+        detail = ((r1.stderr or r1.stdout or "") + (r2.stderr or r2.stdout or "") or "tmux send-keys falló").strip()
+        return False, detail
+    return True, window_idx
+
+def resolve_task_pair(left, right):
+    a = resolve_id(left)
+    b = resolve_id(right)
+    if not a or not b:
+        return None, None
+    if a == b:
+        print("La sesión requiere dos tareas distintas.")
+        return None, None
+    return a, b
+
+def session_key(task_a, task_b):
+    a, b = sorted([task_a, task_b])
+    return f"{a}::{b}"
+
+def get_session(data, task_a, task_b):
+    return data["sessions"].get(session_key(task_a, task_b))
+
+def upsert_session(data, task_a, task_b):
+    key = session_key(task_a, task_b)
+    session = data["sessions"].get(key)
+    if session is None:
+        left, right = sorted([task_a, task_b])
+        session = {"id": key, "tasks": [left, right], "messages": [], "events": []}
+        data["sessions"][key] = session
+    session.setdefault("messages", [])
+    session.setdefault("events", [])
+    return session
+
+def add_session_event(session, event_type, actor, detail=""):
+    session.setdefault("events", []).append({
+        "at": now(),
+        "type": event_type,
+        "actor": actor,
+        "detail": detail,
+    })
+
+def append_session_message(session, from_task, to_task, body):
+    messages = session.setdefault("messages", [])
+    messages.append({
+        "at": now(),
+        "from": from_task,
+        "to": to_task,
+        "body": body,
+    })
+    if len(messages) > 200:
+        del messages[:-200]
+
+def session_participant(session, current_task):
+    if not session:
+        return None
+    if current_task == session["tasks"][0]:
+        return session["tasks"][1]
+    if current_task == session["tasks"][1]:
+        return session["tasks"][0]
+    return None
+
+def session_status_label(session):
+    status = (session or {}).get("status", "unknown")
+    if status == "active":
+        return "activa"
+    if status == "pending":
+        return "pendiente"
+    if status == "rejected":
+        return "rechazada"
+    if status == "closed":
+        return "cerrada"
+    return status
+
+def auto_close_sessions_for_task(task_id, reason):
+    data = read_sessions()
+    changed = False
+    notifications = []
+    for session in data.get("sessions", {}).values():
+        if task_id not in session.get("tasks", []):
+            continue
+        if session.get("status") not in ("pending", "active"):
+            continue
+        peer = session_participant(session, task_id)
+        session["status"] = "closed"
+        session["closed_by"] = task_id
+        session["closed_at"] = now()
+        session["close_reason"] = reason
+        add_session_event(session, "closed", task_id, reason)
+        changed = True
+        if peer:
+            task_append_progress(peer, f"sesión con {task_id} cerrada automáticamente: {reason}")
+            notifications.append((peer, f"[bt/session] {task_id} cerró la sesión compartida. Motivo: {reason}"))
+    if changed:
+        write_sessions(data)
+    for peer, message in notifications:
+        notify_task_terminal(peer, message)
 
 def _ensure_programadas_section():
     """Agrega la sección Programadas a board.md si no existe."""
@@ -377,6 +516,7 @@ def cmd_block(args):
 
 def _finalize_task(tid, result):
     """Ejecuta el cierre real de la tarea (mover a Completadas, limpiar, cerrar tmux)."""
+    auto_close_sessions_for_task(tid, "tarea finalizada")
     task_set_field(tid, "Status", "done")
     # Limpiar PendingResult si existe
     path = TASKS_DIR / f"{tid}.md"
@@ -567,6 +707,226 @@ def cmd_revisar(args):
     manifest["items"].insert(0, entry)
     MANIFEST_FILE.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
     print(f"✓ {dest_name} → para-revisar/")
+
+def cmd_session(args):
+    if not args:
+        print("Uso: bt session request|approve|reject|close|msg|ls ...")
+        print("  bt session request <desde> <hacia> \"motivo\"")
+        print("  bt session approve <mi_tarea> <otra_tarea>")
+        print("  bt session reject <mi_tarea> <otra_tarea> \"motivo\"")
+        print("  bt session close <mi_tarea> <otra_tarea> \"motivo\"")
+        print("  bt session msg <desde> <hacia> \"mensaje\"")
+        print("  bt session ls [<task>]")
+        return
+
+    sub = args[0].lower()
+
+    if sub == "request":
+        if len(args) < 4:
+            return print('Uso: bt session request <desde> <hacia> "motivo"')
+        from_task, to_task = resolve_task_pair(args[1], args[2])
+        if not from_task:
+            return
+        reason = " ".join(args[3:]).strip()
+        data = read_sessions()
+        session = upsert_session(data, from_task, to_task)
+        if session.get("status") == "active":
+            return print(f"Ya existe una sesión activa entre {from_task} y {to_task}.")
+        if session.get("status") == "pending" and session.get("requested_by") == to_task:
+            return print(
+                f"{to_task} ya te solicitó conexión. Apruébala con: bt session approve {from_task} {to_task}"
+            )
+        session.update({
+            "status": "pending",
+            "requested_by": from_task,
+            "requested_to": to_task,
+            "requested_at": now(),
+            "reason": reason,
+        })
+        session.pop("approved_by", None)
+        session.pop("approved_at", None)
+        session.pop("rejected_by", None)
+        session.pop("rejected_at", None)
+        session.pop("reject_reason", None)
+        session.pop("closed_by", None)
+        session.pop("closed_at", None)
+        session.pop("close_reason", None)
+        add_session_event(session, "requested", from_task, reason)
+        write_sessions(data)
+        task_append_progress(from_task, f"solicitud de sesión enviada a {to_task}: {reason}")
+        task_append_progress(to_task, f"{from_task} solicita sesión compartida: {reason}")
+        delivered, detail = notify_task_terminal(
+            to_task,
+            f"[bt/session] {from_task} solicita conexión con {to_task}. Motivo: {reason}. "
+            f"Aprobar: bt session approve {to_task} {from_task}. "
+            f"Rechazar: bt session reject {to_task} {from_task} <motivo>"
+        )
+        print(f"✓ sesión solicitada: {from_task} → {to_task}")
+        if delivered:
+            print(f"  Notificación enviada a la terminal de {to_task} (tmux:{detail}).")
+        else:
+            print(f"  No se pudo notificar en vivo a {to_task}: {detail}")
+        return
+
+    if sub == "approve":
+        if len(args) < 3:
+            return print("Uso: bt session approve <mi_tarea> <otra_tarea>")
+        my_task, peer_task = resolve_task_pair(args[1], args[2])
+        if not my_task:
+            return
+        data = read_sessions()
+        session = get_session(data, my_task, peer_task)
+        if not session:
+            return print(f"No hay sesión registrada entre {my_task} y {peer_task}.")
+        if session.get("status") != "pending":
+            return print(f"La sesión está {session_status_label(session)}, no pendiente.")
+        if session.get("requested_by") == my_task:
+            return print("La contraparte debe aprobar la solicitud.")
+        session["status"] = "active"
+        session["approved_by"] = my_task
+        session["approved_at"] = now()
+        add_session_event(session, "approved", my_task, f"con {peer_task}")
+        write_sessions(data)
+        task_append_progress(my_task, f"sesión con {peer_task} aprobada")
+        task_append_progress(peer_task, f"{my_task} aprobó la sesión compartida")
+        delivered, detail = notify_task_terminal(
+            peer_task,
+            f"[bt/session] {my_task} aprobó la conexión. Canal activo entre {peer_task} y {my_task}. "
+            f"Enviar mensaje: bt session msg {peer_task} {my_task} <mensaje>"
+        )
+        print(f"✓ sesión activa entre {my_task} y {peer_task}")
+        if delivered:
+            print(f"  Aviso entregado a {peer_task} (tmux:{detail}).")
+        else:
+            print(f"  No se pudo avisar en vivo a {peer_task}: {detail}")
+        return
+
+    if sub == "reject":
+        if len(args) < 4:
+            return print('Uso: bt session reject <mi_tarea> <otra_tarea> "motivo"')
+        my_task, peer_task = resolve_task_pair(args[1], args[2])
+        if not my_task:
+            return
+        reason = " ".join(args[3:]).strip()
+        data = read_sessions()
+        session = get_session(data, my_task, peer_task)
+        if not session:
+            return print(f"No hay sesión registrada entre {my_task} y {peer_task}.")
+        if session.get("status") != "pending":
+            return print(f"La sesión está {session_status_label(session)}, no pendiente.")
+        session["status"] = "rejected"
+        session["rejected_by"] = my_task
+        session["rejected_at"] = now()
+        session["reject_reason"] = reason
+        add_session_event(session, "rejected", my_task, reason)
+        write_sessions(data)
+        task_append_progress(my_task, f"sesión con {peer_task} rechazada: {reason}")
+        task_append_progress(peer_task, f"{my_task} rechazó la sesión compartida: {reason}")
+        delivered, detail = notify_task_terminal(
+            peer_task,
+            f"[bt/session] {my_task} rechazó la conexión con {peer_task}. Motivo: {reason}"
+        )
+        print(f"✓ sesión rechazada entre {my_task} y {peer_task}")
+        if delivered:
+            print(f"  Aviso entregado a {peer_task} (tmux:{detail}).")
+        else:
+            print(f"  No se pudo avisar en vivo a {peer_task}: {detail}")
+        return
+
+    if sub == "close":
+        if len(args) < 4:
+            return print('Uso: bt session close <mi_tarea> <otra_tarea> "motivo"')
+        my_task, peer_task = resolve_task_pair(args[1], args[2])
+        if not my_task:
+            return
+        reason = " ".join(args[3:]).strip()
+        data = read_sessions()
+        session = get_session(data, my_task, peer_task)
+        if not session:
+            return print(f"No hay sesión registrada entre {my_task} y {peer_task}.")
+        if session.get("status") != "active":
+            return print(f"La sesión está {session_status_label(session)}, no activa.")
+        session["status"] = "closed"
+        session["closed_by"] = my_task
+        session["closed_at"] = now()
+        session["close_reason"] = reason
+        add_session_event(session, "closed", my_task, reason)
+        write_sessions(data)
+        task_append_progress(my_task, f"sesión con {peer_task} cerrada: {reason}")
+        task_append_progress(peer_task, f"{my_task} cerró la sesión compartida: {reason}")
+        delivered, detail = notify_task_terminal(
+            peer_task,
+            f"[bt/session] {my_task} cerró la sesión con {peer_task}. Motivo: {reason}"
+        )
+        print(f"✓ sesión cerrada entre {my_task} y {peer_task}")
+        if delivered:
+            print(f"  Aviso entregado a {peer_task} (tmux:{detail}).")
+        else:
+            print(f"  No se pudo avisar en vivo a {peer_task}: {detail}")
+        return
+
+    if sub == "msg":
+        if len(args) < 4:
+            return print('Uso: bt session msg <desde> <hacia> "mensaje"')
+        from_task, to_task = resolve_task_pair(args[1], args[2])
+        if not from_task:
+            return
+        message = " ".join(args[3:]).strip()
+        data = read_sessions()
+        session = get_session(data, from_task, to_task)
+        if not session:
+            return print(f"No hay sesión registrada entre {from_task} y {to_task}.")
+        if session.get("status") != "active":
+            return print(f"La sesión está {session_status_label(session)}, no activa.")
+        append_session_message(session, from_task, to_task, message)
+        add_session_event(session, "message", from_task, f"{from_task} → {to_task}")
+        session["last_message_at"] = now()
+        write_sessions(data)
+        task_append_progress(from_task, f"mensaje a {to_task}: {message}")
+        task_append_progress(to_task, f"mensaje de {from_task}: {message}")
+        delivered, detail = notify_task_terminal(
+            to_task,
+            f"[bt/msg {from_task} → {to_task}] {message} | responder: bt session msg {to_task} {from_task} <mensaje>"
+        )
+        print(f"✓ mensaje registrado para {to_task}")
+        if delivered:
+            print(f"  Entregado en la terminal de {to_task} (tmux:{detail}).")
+        else:
+            print(f"  No se pudo entregar en vivo; quedó auditado en ambos logs. Detalle: {detail}")
+        return
+
+    if sub == "ls":
+        task_filter = None
+        if len(args) > 1:
+            task_filter = resolve_id(args[1])
+            if not task_filter:
+                return
+        sessions = list(read_sessions().get("sessions", {}).values())
+        if task_filter:
+            sessions = [s for s in sessions if task_filter in s.get("tasks", [])]
+        if not sessions:
+            label = task_filter or "el board"
+            print(f"No hay sesiones registradas para {label}.")
+            return
+        sessions.sort(key=lambda s: (
+            {"pending": 0, "active": 1, "rejected": 2, "closed": 3}.get(s.get("status"), 9),
+            s.get("requested_at", ""),
+            s.get("id", ""),
+        ))
+        print()
+        print("Sesiones:")
+        print()
+        for session in sessions:
+            left, right = session.get("tasks", ["?", "?"])
+            summary = session.get("reason") or session.get("close_reason") or session.get("reject_reason") or "—"
+            print(
+                f"  {session_status_label(session):<9}  {left}  ↔  {right}  "
+                f"req:{session.get('requested_by', '—')}  {summary[:100]}"
+            )
+        print()
+        return
+
+    print(f"Subcomando desconocido: {sub}")
 
 def cmd_ls(args):
     """bt ls [status] — lista tareas; sin argumento muestra activas+bloqueadas"""
@@ -850,6 +1210,7 @@ CMDS = {
     "done":     cmd_done,
     "finalize": cmd_finalize,
     "revisar":  cmd_revisar,
+    "session":  cmd_session,
     "ls":       cmd_ls,
     "show":     cmd_show,
     "status":   cmd_status,
@@ -870,6 +1231,12 @@ def main():
         print("  bt done <id> \"resultado\"     # solicita cierre (requiere aprobación)")
         print("  bt finalize <id>               # cierra definitivamente tras aprobación")
         print("  bt revisar <archivo> \"titulo\" [\"nota\"] [--task <id>]")
+        print("  bt session request <desde> <hacia> \"motivo\"")
+        print("  bt session approve <mi_tarea> <otra_tarea>")
+        print("  bt session reject <mi_tarea> <otra_tarea> \"motivo\"")
+        print("  bt session close <mi_tarea> <otra_tarea> \"motivo\"")
+        print("  bt session msg <desde> <hacia> \"mensaje\"")
+        print("  bt session ls [<task>]")
         print("  bt ls [pending|in_progress|blocked|scheduled|done|all]")
         print("  bt show <id>")
         print("  bt status")
