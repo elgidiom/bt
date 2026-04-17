@@ -83,6 +83,16 @@
 
   .empty { padding:14px; color:#334155; font-size:13px; font-style:italic; }
 
+  /* ── Collaborative rows ── */
+  tr.collab-row td { border-left: 3px solid #6366f1; background: #12172a; }
+  tr.collab-row:hover td { background: #141824; }
+  .badge-collab { background:#312e81; color:#a5b4fc; border:1px solid #4338ca; padding:2px 7px; border-radius:4px; font-size:10px; font-weight:600; }
+  .collab-card { border-left: 3px solid #6366f1; background: #12172a; }
+  .collab-send-bar { display:flex; gap:6px; margin-top:6px; }
+  .collab-send-bar input { flex:1; background:#0f1623; border:1px solid #1e2535; border-radius:6px; padding:6px 10px; color:#e2e8f0; font-size:13px; }
+  .collab-send-bar button { background:#6366f1; color:#fff; border:none; border-radius:6px; padding:6px 12px; cursor:pointer; font-size:12px; }
+  .collab-send-bar button:hover { background:#4f46e5; }
+
   .divider { border:none; border-top:1px solid #1e2535; margin:28px 0; }
 
   /* ── DESKTOP: tabla ── */
@@ -406,6 +416,7 @@
 const POLL = 5000;
 const logPanels = new Set();
 const logCache  = {};
+let sessionsData = [];
 
 function badge(text) {
   const key = text.trim().toLowerCase().replace(/\s+/g,'_');
@@ -496,21 +507,146 @@ function taskActions(taskId, isClose) {
   </div>`;
 }
 
-// Desktop table
-function renderTable(table) {
-  if (!table) return `<div class="empty">Sin tareas</div>`;
-  const rows = table.dataRows.filter(r => !isPlaceholder(r));
-  if (!rows.length) return `<div class="empty">Sin tareas</div>`;
+// ── Collaborative sessions ─────────────────────────────────────────────────
 
-  const isScheduledSection = table.headers.some(h => h.toLowerCase().includes('programada para'));
+function renderCollabRows(sessions) {
+  if (!sessions || !sessions.length) return '';
+  let h = '';
+  sessions.forEach(s => {
+    const skey   = s.key;
+    const sid    = `collab-${skey.replace(/::/g,'-')}`;
+    const msgs   = (s.messages || []).slice(-3).map(m =>
+      `<span style="color:#64748b;font-size:11px">${m.from||'?'}</span>: ${m.body||''}`
+    ).join('<br>');
+    const reason = s.reason || '—';
+    const owners = `${s.task_a} + ${s.task_b}`;
+    const inputId = `collab-input-${sid}`;
+    h += `<tr class="collab-row">
+      <td style="color:#818cf8">🤝</td>
+      <td><span class="badge-collab">colaborativa</span> ${reason}</td>
+      <td style="font-size:11px;color:#64748b">${owners}</td>
+      <td><span class="badge badge-${s.status==='active'?'in-progress':'pending'}">${s.status}</span></td>
+      <td>${msgs || '<span style="color:#334155;font-size:11px">sin mensajes</span>'}</td>
+      <td>
+        <button class="log-btn" data-log-btn="${skey}" onclick="toggleSessionLog('${skey}')">▸ msgs</button>
+      </td>
+    </tr>
+    <tr class="log-row" data-log-row="${skey}" style="display:none"><td colspan="6">
+      <div data-log-panel="${skey}" class="log-timeline">
+        ${renderSessionMessages(s)}
+      </div>
+      <div class="collab-send-bar">
+        <input id="${inputId}" type="text" placeholder="Enviar a ambos agentes…" onkeydown="if(event.key==='Enter')sendToSession('${skey}','${inputId}','${sid}')">
+        <button onclick="sendToSession('${skey}','${inputId}','${sid}')">Enviar</button>
+      </div>
+    </td></tr>`;
+  });
+  return h;
+}
+
+function renderCollabCards(sessions) {
+  if (!sessions || !sessions.length) return '';
+  let h = '';
+  sessions.forEach(s => {
+    const skey    = s.key;
+    const sid     = `collab-${skey.replace(/::/g,'-')}`;
+    const inputId = `collab-cinput-${sid}`;
+    const reason  = s.reason || '—';
+    h += `<div class="card collab-card">
+      <div class="card-top">
+        <div class="card-title">🤝 ${reason}</div>
+        <span class="badge-collab">colaborativa</span>
+      </div>
+      <div class="card-meta">
+        <span data-label="agentes">${s.task_a} + ${s.task_b}</span>
+        <span data-label="estado">${s.status}</span>
+      </div>
+      <div class="card-log">
+        <button class="log-btn" data-log-btn="${skey}" onclick="toggleSessionLog('${skey}')">▸ msgs</button>
+        <div data-log-panel="${skey}" class="log-timeline" style="display:none">
+          ${renderSessionMessages(s)}
+        </div>
+      </div>
+      <div class="collab-send-bar">
+        <input id="${inputId}" type="text" placeholder="Enviar a ambos…" onkeydown="if(event.key==='Enter')sendToSession('${skey}','${inputId}','${sid}')">
+        <button onclick="sendToSession('${skey}','${inputId}','${sid}')">Enviar</button>
+      </div>
+    </div>`;
+  });
+  return h;
+}
+
+function renderSessionMessages(s) {
+  const msgs = s.messages || [];
+  if (!msgs.length) return '<div class="log-empty">sin mensajes aún</div>';
+  return msgs.slice().reverse().map(m => {
+    const cls = m.from === 'user' ? 'log-entry log-done' : 'log-entry';
+    return `<div class="${cls}">
+      <span class="log-time">${(m.ts||'').slice(11,16)}</span>
+      <span class="log-msg"><b>${m.from||'?'}</b>: ${m.body||''}</span>
+    </div>`;
+  }).join('');
+}
+
+function toggleSessionLog(skey) {
+  if (logPanels.has(skey)) {
+    logPanels.delete(skey);
+  } else {
+    logPanels.add(skey);
+  }
+  document.querySelectorAll(`[data-log-row="${skey}"]`).forEach(row => {
+    row.style.display = logPanels.has(skey) ? '' : 'none';
+  });
+  document.querySelectorAll(`[data-log-panel="${skey}"]`).forEach(panel => {
+    panel.style.display = logPanels.has(skey) ? 'block' : 'none';
+  });
+  document.querySelectorAll(`[data-log-btn="${skey}"]`).forEach(btn => {
+    btn.textContent = logPanels.has(skey) ? '▾ msgs' : '▸ msgs';
+  });
+}
+
+async function sendToSession(skey, inputId, barId) {
+  const input = document.getElementById(inputId);
+  if (!input) return;
+  const msg = input.value.trim();
+  if (!msg) return;
+  input.value = '';
+  try {
+    const r = await fetch('/api/tell-session', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({session_key: skey, message: msg})
+    });
+    const data = await r.json();
+    if (!data.ok) alert('Error: ' + (data.error || 'desconocido'));
+  } catch(e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+async function fetchSessions() {
+  try {
+    const r = await fetch('/api/sessions?t=' + Date.now());
+    if (r.ok) sessionsData = await r.json();
+  } catch(e) { /* silencio */ }
+}
+
+// Desktop table
+function renderTable(table, extraRows='') {
+  if (!table && !extraRows) return `<div class="empty">Sin tareas</div>`;
+  const rows = table ? table.dataRows.filter(r => !isPlaceholder(r)) : [];
+  if (!rows.length && !extraRows) return `<div class="empty">Sin tareas</div>`;
+
+  const isScheduledSection = table ? table.headers.some(h => h.toLowerCase().includes('programada para')) : false;
+  const headers = table ? table.headers : ['ID','Tarea','Owner','Estado','Actividad','Actualizado'];
 
   let h = `<div class="table-wrap"><table><thead><tr>`;
-  table.headers.forEach(th => h += `<th>${th}</th>`);
+  headers.forEach(th => h += `<th>${th}</th>`);
   h += `</tr></thead><tbody>`;
 
   rows.forEach(row => {
     const idx = {};
-    table.headers.forEach((hd,i) => idx[hd.toLowerCase()] = i);
+    headers.forEach((hd,i) => idx[hd.toLowerCase()] = i);
     const blocker  = row[idx['bloqueador']] || '';
     const taskId   = row[0] || '';
     const status   = row[idx['estado'] ?? idx['status']] || '';
@@ -551,21 +687,22 @@ function renderTable(table) {
     });
     h += `</tr>`;
     if (showLog) {
-      h += `<tr class="log-row" data-log-row="${taskId}" style="display:none"><td colspan="${table.headers.length}"><div data-log-panel="${taskId}" class="log-timeline"><div class="log-loading">cargando…</div></div></td></tr>`;
+      h += `<tr class="log-row" data-log-row="${taskId}" style="display:none"><td colspan="${headers.length}"><div data-log-panel="${taskId}" class="log-timeline"><div class="log-loading">cargando…</div></div></td></tr>`;
     }
   });
+  h += extraRows;
   return h + `</tbody></table></div>`;
 }
 
 // Mobile cards
-function renderCards(table) {
-  if (!table) return `<div class="cards"><div class="empty">Sin tareas</div></div>`;
-  const rows = table.dataRows.filter(r => !isPlaceholder(r));
-  if (!rows.length) return `<div class="cards"><div class="empty">Sin tareas</div></div>`;
+function renderCards(table, extraCards='') {
+  if (!table && !extraCards) return `<div class="cards"><div class="empty">Sin tareas</div></div>`;
+  const rows = table ? table.dataRows.filter(r => !isPlaceholder(r)) : [];
+  if (!rows.length && !extraCards) return `<div class="cards"><div class="empty">Sin tareas</div></div>`;
 
-  const isScheduledSection = table.headers.some(h => h.toLowerCase().includes('programada para'));
+  const isScheduledSection = table ? table.headers.some(h => h.toLowerCase().includes('programada para')) : false;
   const idx = {};
-  table.headers.forEach((h,i) => idx[h.toLowerCase()] = i);
+  if (table) table.headers.forEach((h,i) => idx[h.toLowerCase()] = i);
 
   const get = (row, ...keys) => {
     for (const k of keys) if (idx[k] !== undefined) return row[idx[k]] || '';
@@ -612,6 +749,7 @@ function renderCards(table) {
       ${taskId ? `<div class="card-log"><button class="log-btn" data-log-btn="${taskId}" onclick="toggleLog('${taskId}')">▸ logs</button><div data-log-panel="${taskId}" class="log-timeline" style="display:none"><div class="log-loading">cargando…</div></div></div>` : ''}
     </div>`;
   });
+  h += extraCards;
   return h + `</div>`;
 }
 
@@ -641,7 +779,11 @@ function renderBoard(md) {
 
     const tlines = sec.lines.filter(l => l.trim().startsWith('|'));
     const table  = tlines.length >= 3 ? parseTable(tlines) : null;
-    const count  = table ? table.dataRows.filter(r => !isPlaceholder(r)).length : 0;
+    const isActivas = sec.title.toLowerCase().includes('activa');
+    const collabRows = isActivas ? renderCollabRows(sessionsData) : '';
+    const collabCards = isActivas ? renderCollabCards(sessionsData) : '';
+    const count  = (table ? table.dataRows.filter(r => !isPlaceholder(r)).length : 0)
+                 + (isActivas ? sessionsData.length : 0);
 
     // Ocultar sección Programadas si no hay tareas
     if (sec.title.toLowerCase().includes('programada') && count === 0) return;
@@ -651,8 +793,8 @@ function renderBoard(md) {
         <span class="section-title">${sec.title}</span>
         <span class="section-count">${count}</span>
       </div>
-      ${renderTable(table)}
-      ${renderCards(table)}
+      ${renderTable(table, collabRows)}
+      ${renderCards(table, collabCards)}
     </div>`;
 
     if (sec.title.toLowerCase().includes('programada') ||
@@ -741,21 +883,31 @@ function toggleLog(taskId) {
 }
 
 function restoreLogPanels() {
-  for (const taskId of logPanels) {
-    document.querySelectorAll(`[data-log-row="${taskId}"]`).forEach(row => {
+  for (const id of logPanels) {
+    document.querySelectorAll(`[data-log-row="${id}"]`).forEach(row => {
       row.style.display = '';
     });
-    document.querySelectorAll(`[data-log-panel="${taskId}"]`).forEach(panel => {
+    document.querySelectorAll(`[data-log-panel="${id}"]`).forEach(panel => {
       panel.style.display = 'block';
-      panel.innerHTML = logCache[taskId] ? renderLog(logCache[taskId]) : '<div class="log-loading">cargando…</div>';
+      if (id.includes('::')) {
+        const s = sessionsData.find(x => x.key === id);
+        panel.innerHTML = s ? renderSessionMessages(s) : '<div class="log-empty">sin sesión</div>';
+      } else {
+        panel.innerHTML = logCache[id] ? renderLog(logCache[id]) : '<div class="log-loading">cargando…</div>';
+      }
     });
-    document.querySelectorAll(`[data-log-btn="${taskId}"]`).forEach(btn => btn.textContent = '▾ logs');
+    document.querySelectorAll(`[data-log-btn="${id}"]`).forEach(btn => {
+      btn.textContent = id.includes('::') ? '▾ msgs' : '▾ logs';
+    });
   }
 }
 
 async function refresh() {
   try {
-    const r = await fetch('board.md?t=' + Date.now());
+    const [r] = await Promise.all([
+      fetch('board.md?t=' + Date.now()),
+      fetchSessions(),
+    ]);
     if (!r.ok) throw new Error(r.status);
 
     // Guardar valores de inputs activos (approval-input) antes de re-renderizar
@@ -804,7 +956,9 @@ async function refresh() {
 
 // Refresco rápido de paneles de logs abiertos
 setInterval(() => {
-  for (const taskId of logPanels) fetchTaskLog(taskId);
+  for (const id of logPanels) {
+    if (!id.includes('::')) fetchTaskLog(id);
+  }
 }, 2000);
 
 // Actualizar countdowns de tareas programadas cada 30s

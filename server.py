@@ -12,6 +12,7 @@ BOARD_DIR    = Path(os.environ.get("IT_BOARD_DIR", str(SCRIPT_DIR))).expanduser(
 BT           = BOARD_DIR / "bt"
 WINDOWS_FILE = BOARD_DIR / "windows.json"
 CONFIG_FILE  = BOARD_DIR / "config.json"
+SESSIONS_FILE = BOARD_DIR / "agent_sessions.json"
 PORT         = int(os.environ.get("PORT", 8765))
 TMUX_SESSION = os.environ.get("IT_TMUX_SESSION", "bt-agents")
 
@@ -328,6 +329,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "api/config":
             return self.send_json(200, load_config())
 
+        if path == "api/sessions":
+            return self._sessions()
+
         if path.startswith("api/task/") and path.endswith("/progress"):
             task_id = path[len("api/task/"):-len("/progress")]
             return self._task_progress(task_id)
@@ -373,6 +377,8 @@ class Handler(BaseHTTPRequestHandler):
             self._done()
         elif self.path == "/api/cancel":
             self._cancel()
+        elif self.path == "/api/tell-session":
+            self._tell_session()
         else:
             self.send_response(404); self.end_headers()
 
@@ -686,6 +692,57 @@ class Handler(BaseHTTPRequestHandler):
         ])
 
         self.send_json(200, {"ok": True, "sent": response, "window": window_idx})
+
+    def _sessions(self):
+        if not SESSIONS_FILE.exists():
+            return self.send_json(200, [])
+        try:
+            data = json.loads(SESSIONS_FILE.read_text())
+        except Exception:
+            return self.send_json(200, [])
+        sessions = []
+        for key, s in data.items():
+            if s.get("status") in ("active", "pending"):
+                sessions.append({
+                    "key":      key,
+                    "task_a":   s.get("task_a", ""),
+                    "task_b":   s.get("task_b", ""),
+                    "reason":   s.get("reason", ""),
+                    "status":   s.get("status", ""),
+                    "messages": s.get("messages", []),
+                    "created":  s.get("created", ""),
+                })
+        self.send_json(200, sessions)
+
+    def _tell_session(self):
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            body = json.loads(self.rfile.read(length))
+        except Exception:
+            return self.send_json(400, {"error": "JSON inválido"})
+
+        session_key = (body.get("session_key") or "").strip()
+        message     = (body.get("message")     or "").strip()
+        if not session_key or not message:
+            return self.send_json(400, {"error": "session_key y message requeridos"})
+
+        tasks = session_key.split("::")
+        if len(tasks) != 2:
+            return self.send_json(400, {"error": "session_key inválido"})
+
+        errors = []
+        for tid in tasks:
+            r = subprocess.run(
+                [str(BT), "tell", tid, message],
+                capture_output=True, text=True,
+                env={**os.environ, "IT_BOARD_DIR": str(BOARD_DIR)}
+            )
+            if r.returncode != 0:
+                errors.append(f"{tid}: {(r.stderr or r.stdout).strip()}")
+
+        if errors:
+            return self.send_json(500, {"error": "; ".join(errors)})
+        self.send_json(200, {"ok": True, "session_key": session_key, "sent_to": tasks})
 
 
 if __name__ == "__main__":
