@@ -141,24 +141,38 @@ def write_inbox(to_task, body):
     with open(path, 'a') as f:
         f.write(f"[{now()}]\n{body}\n\n---\n\n")
 
+def print_inbox_if_pending(tid):
+    """Muestra aviso si el inbox tiene mensajes sin leer. Llamado desde bt log/start/block."""
+    path = inbox_path(tid)
+    if not path.exists():
+        return
+    content = path.read_text().strip()
+    if not content:
+        return
+    msgs = [m.strip() for m in content.split("---") if m.strip()]
+    print(f"\n[bt] ⚠  inbox de {tid}: {len(msgs)} mensaje(s) pendiente(s)")
+    for msg in msgs[-2:]:
+        print(f"  {msg[:200]}")
+    print(f"[bt] → ejecuta: bt inbox {tid}\n")
+
 def notify_task_terminal(task_id, message):
-    """Escribe al inbox del agente (siempre) y envía ping corto vía tmux (best-effort)."""
+    """Escribe al inbox del agente (siempre) y envía ping vía tmux (best-effort).
+
+    El texto + Enter van en una sola llamada a tmux para evitar la race condition
+    donde Claude Code redibuja el terminal entre las dos llamadas y pierde el Enter.
+    """
     write_inbox(task_id, message)
     slug = read_windows().get(task_id) or task_id.replace("task-", "")[-22:]
     window_idx = find_tmux_window(slug)
     if window_idx is None:
         return False, f"inbox escrito; ventana tmux no encontrada para {task_id}"
     target = f"{TMUX_SESSION}:{window_idx}"
-    r1 = subprocess.run(
-        ["tmux", "send-keys", "-t", target, "-l", f"[bt] tienes mensajes — bt inbox {task_id}"],
+    r = subprocess.run(
+        ["tmux", "send-keys", "-t", target, f"bt inbox {task_id}", "Enter"],
         capture_output=True, text=True
     )
-    r2 = subprocess.run(
-        ["tmux", "send-keys", "-t", target, "Enter"],
-        capture_output=True, text=True
-    )
-    if r1.returncode != 0 or r2.returncode != 0:
-        detail = ((r1.stderr or r1.stdout or "") + (r2.stderr or r2.stdout or "") or "tmux ping falló").strip()
+    if r.returncode != 0:
+        detail = (r.stderr or r.stdout or "tmux ping falló").strip()
         return False, detail
     return True, window_idx
 
@@ -479,6 +493,7 @@ def cmd_start(args):
                                 {"estado": "in_progress", "actividad": "iniciando...", "actualizado": today()})
     BOARD_FILE.write_text("\n".join(lines) + "\n")
     print(f"✓ {tid} → in_progress")
+    print_inbox_if_pending(tid)
 
 def cmd_log(args):
     if len(args) < 2: return print("Uso: bt log <id> \"mensaje\"")
@@ -508,6 +523,7 @@ def cmd_log(args):
         lines = update_row_cols(lines, tid, {"actividad": msg[:200], "actualizado": today()})
     BOARD_FILE.write_text("\n".join(lines) + "\n")
     print(f"✓ {tid}")
+    print_inbox_if_pending(tid)
 
 def cmd_block(args):
     if len(args) < 2: return print("Uso: bt block <id> \"razon\"")
