@@ -336,6 +336,10 @@ class Handler(BaseHTTPRequestHandler):
             task_id = path[len("api/task/"):-len("/progress")]
             return self._task_progress(task_id)
 
+        if path.startswith("api/task/") and path.endswith("/docs"):
+            task_id = path[len("api/task/"):-len("/docs")]
+            return self._task_docs(task_id)
+
         # Archivos estáticos desde BOARD_DIR
         if not path or path == "board.html":
             path = "board.html"
@@ -640,6 +644,46 @@ class Handler(BaseHTTPRequestHandler):
                 result_lines.append(line)
         progress = "\n".join(result_lines).strip()
         self.send_json(200, {"task_id": task_id, "progress": progress})
+
+    def _task_docs(self, task_id: str):
+        if not re.match(r'^task-[\w-]+$', task_id):
+            return self.send_json(400, {"error": "ID inválido"})
+        task_file = BOARD_DIR / "tasks" / f"{task_id}.md"
+        if not task_file.exists():
+            return self.send_json(404, {"error": "tarea no encontrada"})
+        content = task_file.read_text()
+
+        # Extraer URLs de la sección "Qué se pide"
+        urls = []
+        in_section = False
+        for line in content.splitlines():
+            if line.strip() == "## Qué se pide":
+                in_section = True
+                continue
+            if in_section and line.startswith("## "):
+                break
+            if in_section:
+                found = re.findall(r'https?://[^\s\)\]\>]+', line)
+                urls.extend(found)
+
+        # Buscar artefactos en manifest con este task_id
+        artifacts = []
+        manifest_file = BOARD_DIR / "para-revisar" / "manifest.json"
+        if manifest_file.exists():
+            try:
+                manifest = json.loads(manifest_file.read_text())
+                for item in manifest.get("items", []):
+                    if item.get("task_id") == task_id:
+                        artifacts.append({
+                            "file": item.get("file", ""),
+                            "title": item.get("title", item.get("file", "")),
+                            "note": item.get("note", ""),
+                            "date": item.get("date", ""),
+                        })
+            except Exception:
+                pass
+
+        self.send_json(200, {"task_id": task_id, "urls": urls, "artifacts": artifacts})
 
     def _respond(self):
         length = int(self.headers.get("Content-Length", 0))

@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Agent Board</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='%231e293b'/><rect x='4' y='7' width='7' height='4' rx='1.5' fill='%2360a5fa'/><rect x='4' y='13' width='7' height='4' rx='1.5' fill='%2360a5fa' opacity='.6'/><rect x='13' y='7' width='7' height='4' rx='1.5' fill='%23a78bfa'/><rect x='13' y='13' width='7' height='4' rx='1.5' fill='%23f59e0b'/><rect x='22' y='7' width='6' height='4' rx='1.5' fill='%234ade80'/><rect x='22' y='13' width='6' height='4' rx='1.5' fill='%234ade80' opacity='.4'/></svg>">
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -254,6 +255,29 @@
     transition: border-color .15s, color .15s;
   }
   .log-btn:hover { border-color: #60a5fa; color: #60a5fa; }
+  .docs-btn {
+    background: none; border: 1px solid #334155; border-radius: 4px;
+    padding: 2px 7px; font-size: 11px; cursor: pointer;
+    color: #64748b; font-family: inherit; margin-top: 6px; margin-left: 4px;
+    display: inline-block; transition: border-color .15s, color .15s;
+  }
+  .docs-btn:hover { border-color: #4ade80; color: #4ade80; }
+  .docs-panel {
+    background: #0a0d14; border: 1px solid #1e2535; border-radius: 6px;
+    padding: 12px 14px; margin-top: 6px;
+  }
+  .docs-section { margin-bottom: 10px; }
+  .docs-section:last-child { margin-bottom: 0; }
+  .docs-label {
+    font-size: 10px; font-weight: 700; color: #475569;
+    text-transform: uppercase; letter-spacing: .5px; margin-bottom: 6px;
+  }
+  .docs-link {
+    display: block; font-size: 11px; color: #60a5fa;
+    text-decoration: none; word-break: break-all; padding: 3px 0;
+    transition: color .15s;
+  }
+  .docs-link:hover { color: #93c5fd; text-decoration: underline; }
   .log-row td { padding: 0 12px 10px 28px !important; }
 
   .log-timeline {
@@ -414,8 +438,10 @@
 
 <script>
 const POLL = 5000;
-const logPanels = new Set();
-const logCache  = {};
+const logPanels  = new Set();
+const logCache   = {};
+const docsPanels = new Set();
+const docsCache  = {};
 let sessionsData = [];
 
 function badge(text) {
@@ -676,6 +702,9 @@ function renderTable(table, extraRows='') {
       if (showLog && (hdr === 'actualizado' || hdr === 'fecha' || hdr === 'workspace')) {
         if (hdr !== 'workspace' || isScheduledSection) {
           content += `<br><button class="log-btn" data-log-btn="${taskId}" onclick="toggleLog('${taskId}')">▸ logs</button>`;
+          if (isDoneSection && taskId) {
+            content += `<button class="docs-btn" data-docs-btn="${taskId}" onclick="toggleDocs('${taskId}')">📄 docs</button>`;
+          }
           if (isScheduledSection && taskId) {
             content += scheduledActions(taskId);
           } else if (showTaskActions) {
@@ -688,6 +717,9 @@ function renderTable(table, extraRows='') {
     h += `</tr>`;
     if (showLog) {
       h += `<tr class="log-row" data-log-row="${taskId}" style="display:none"><td colspan="${headers.length}"><div data-log-panel="${taskId}" class="log-timeline"><div class="log-loading">cargando…</div></div></td></tr>`;
+    }
+    if (isDoneSection && taskId) {
+      h += `<tr class="log-row" data-docs-row="${taskId}" style="display:none"><td colspan="${headers.length}"><div data-docs-panel="${taskId}" class="docs-panel"><div class="log-loading">cargando…</div></div></td></tr>`;
     }
   });
   h += extraRows;
@@ -746,7 +778,7 @@ function renderCards(table, extraCards='') {
       ${showIntervene ? interveneBar(taskId) : ''}
       ${isScheduledSection && taskId ? scheduledActions(taskId) : ''}
       ${showTaskActions ? taskActions(taskId, blockerMode(blocker) === 'close') : ''}
-      ${taskId ? `<div class="card-log"><button class="log-btn" data-log-btn="${taskId}" onclick="toggleLog('${taskId}')">▸ logs</button><div data-log-panel="${taskId}" class="log-timeline" style="display:none"><div class="log-loading">cargando…</div></div></div>` : ''}
+      ${taskId ? `<div class="card-log"><button class="log-btn" data-log-btn="${taskId}" onclick="toggleLog('${taskId}')">▸ logs</button>${isDoneSection ? `<button class="docs-btn" data-docs-btn="${taskId}" onclick="toggleDocs('${taskId}')">📄 docs</button>` : ''}<div data-log-panel="${taskId}" class="log-timeline" style="display:none"><div class="log-loading">cargando…</div></div>${isDoneSection ? `<div data-docs-panel="${taskId}" class="docs-panel" style="display:none"><div class="log-loading">cargando…</div></div>` : ''}</div>` : ''}
     </div>`;
   });
   h += extraCards;
@@ -864,6 +896,69 @@ async function fetchTaskLog(taskId) {
   } catch {}
 }
 
+async function fetchTaskDocs(taskId) {
+  try {
+    const r = await fetch(`/api/task/${taskId}/docs?t=${Date.now()}`);
+    if (!r.ok) return;
+    const d = await r.json();
+    docsCache[taskId] = d;
+    document.querySelectorAll(`[data-docs-panel="${taskId}"]`).forEach(el => {
+      el.innerHTML = renderDocs(d);
+    });
+  } catch {}
+}
+
+function renderDocs(d) {
+  const parts = [];
+  if (d.urls && d.urls.length) {
+    parts.push(`<div class="docs-section">
+      <div class="docs-label">🔗 Links en la tarea</div>
+      ${d.urls.map(u => `<a class="docs-link" href="${u}" target="_blank" rel="noopener">${u}</a>`).join('')}
+    </div>`);
+  }
+  if (d.artifacts && d.artifacts.length) {
+    parts.push(`<div class="docs-section">
+      <div class="docs-label">📄 Documentos generados</div>
+      ${d.artifacts.map(a => `<a class="docs-link" href="/para-revisar/${a.file}" target="_blank" rel="noopener">${a.title}${a.note ? ` — ${a.note}` : ''}</a>`).join('')}
+    </div>`);
+  }
+  if (!parts.length) return `<div class="log-empty">sin documentos asociados</div>`;
+  return parts.join('');
+}
+
+function toggleDocs(taskId) {
+  if (docsPanels.has(taskId)) {
+    docsPanels.delete(taskId);
+  } else {
+    docsPanels.add(taskId);
+    fetchTaskDocs(taskId);
+  }
+  document.querySelectorAll(`[data-docs-row="${taskId}"]`).forEach(row => {
+    row.style.display = docsPanels.has(taskId) ? '' : 'none';
+  });
+  document.querySelectorAll(`[data-docs-panel="${taskId}"]`).forEach(panel => {
+    panel.style.display = docsPanels.has(taskId) ? 'block' : 'none';
+  });
+  document.querySelectorAll(`[data-docs-btn="${taskId}"]`).forEach(btn => {
+    btn.textContent = docsPanels.has(taskId) ? '📄 docs ▾' : '📄 docs';
+  });
+}
+
+function restoreDocsPanels() {
+  for (const id of docsPanels) {
+    document.querySelectorAll(`[data-docs-row="${id}"]`).forEach(row => {
+      row.style.display = '';
+    });
+    document.querySelectorAll(`[data-docs-panel="${id}"]`).forEach(panel => {
+      panel.style.display = 'block';
+      panel.innerHTML = docsCache[id] ? renderDocs(docsCache[id]) : '<div class="log-loading">cargando…</div>';
+    });
+    document.querySelectorAll(`[data-docs-btn="${id}"]`).forEach(btn => {
+      btn.textContent = '📄 docs ▾';
+    });
+  }
+}
+
 function toggleLog(taskId) {
   if (logPanels.has(taskId)) {
     logPanels.delete(taskId);
@@ -929,6 +1024,7 @@ async function refresh() {
     document.getElementById('board').innerHTML = renderBoard(await r.text());
     requestAnimationFrame(pruneVerMas);
     restoreLogPanels();
+    restoreDocsPanels();
     updateCountdowns();
 
     // Restaurar valores guardados
