@@ -572,19 +572,36 @@ def _finalize_task(tid, result):
             ]
             if linked:
                 archive_dir.mkdir(exist_ok=True)
+                archived_entries = []
                 for item in linked:
                     f = REVISAR_DIR / item["file"]
+                    dest_name = f.name
                     if f.exists():
                         dest = archive_dir / f.name
-                        # Evitar colisiones con archivos ya archivados
                         if dest.exists():
                             dest = archive_dir / f"{f.stem}-{tid[:20]}{f.suffix}"
+                            dest_name = dest.name
                         shutil.move(str(f), str(dest))
+                    archived_entries.append({
+                        "file": dest_name,
+                        "task_id": tid,
+                        "title": item.get("title", dest_name),
+                        "note": item.get("note", ""),
+                        "date": item.get("date", ""),
+                    })
                 manifest["items"] = [
                     i for i in manifest["items"]
                     if normalize_task_id(i.get("task_id")) != tid
                 ]
                 MANIFEST_FILE.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n")
+                # Persistir en archivados/manifest.json
+                arch_manifest_file = archive_dir / "manifest.json"
+                arch_manifest = {"items": []}
+                if arch_manifest_file.exists():
+                    try: arch_manifest = json.loads(arch_manifest_file.read_text())
+                    except Exception: pass
+                arch_manifest["items"] = archived_entries + arch_manifest.get("items", [])
+                arch_manifest_file.write_text(json.dumps(arch_manifest, ensure_ascii=False, indent=2) + "\n")
                 print(f"  → {len(linked)} item(s) archivados en para-revisar/archivados/")
     except Exception:
         pass

@@ -666,17 +666,22 @@ class Handler(BaseHTTPRequestHandler):
                 found = re.findall(r'https?://[^\s\)\]\>]+', line)
                 urls.extend(found)
 
-        # Buscar artefactos en manifest con este task_id
+        # Buscar artefactos en manifest activo y en archivados
         artifacts = []
-        manifest_file = BOARD_DIR / "para-revisar" / "manifest.json"
-        if manifest_file.exists():
+        for manifest_path, prefix in [
+            (BOARD_DIR / "para-revisar" / "manifest.json", ""),
+            (BOARD_DIR / "para-revisar" / "archivados" / "manifest.json", "archivados/"),
+        ]:
+            if not manifest_path.exists():
+                continue
             try:
-                manifest = json.loads(manifest_file.read_text())
+                manifest = json.loads(manifest_path.read_text())
                 for item in manifest.get("items", []):
                     if item.get("task_id") == task_id:
+                        fname = item.get("file", "")
                         artifacts.append({
-                            "file": item.get("file", ""),
-                            "title": item.get("title", item.get("file", "")),
+                            "file": prefix + fname,
+                            "title": item.get("title", fname),
                             "note": item.get("note", ""),
                             "date": item.get("date", ""),
                         })
