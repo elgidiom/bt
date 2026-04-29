@@ -134,6 +134,17 @@ bt done <id> "correo enviado a soporte@nubosoft.com, adjunto PDF 3 págs, smtp 2
 
 ---
 
+## Mensajes del usuario mientras trabajas (inbox)
+
+Cuando el usuario te envía una instrucción adicional desde el board mientras estás `in_progress`, el mensaje llega a tu **inbox** (no directamente en el prompt). Puedes recibirlo de dos formas:
+
+1. **Ping por tmux**: recibirás `bt inbox <tu-id>` como mensaje del usuario → **ejecútalo inmediatamente** con la herramienta Bash para leer los mensajes.
+2. **Notificación en output de bt log**: si `bt log` imprime `⚠ inbox de <id>: N mensaje(s) pendiente(s)` → ejecuta `bt inbox <tu-id>` antes de continuar.
+
+Nunca ignores un inbox con mensajes. Si el usuario cambió el alcance o añadió context, procesa los mensajes antes de continuar con el trabajo.
+
+---
+
 ## Reglas generales
 
 - Empezar siempre con `bt start` antes de hacer cualquier cosa.

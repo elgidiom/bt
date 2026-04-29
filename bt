@@ -538,6 +538,7 @@ def cmd_block(args):
                                               old[2] if len(old)>2 else "—", reason, today()])
     BOARD_FILE.write_text("\n".join(lines) + "\n")
     print(f"✓ {tid} → bloqueada: {reason}")
+    print_inbox_if_pending(tid)
 
 def _finalize_task(tid, result):
     """Ejecuta el cierre real de la tarea (mover a Completadas, limpiar, cerrar tmux)."""
@@ -655,6 +656,7 @@ def cmd_done(args):
     print(f"✓ {tid} → esperando aprobación para cerrar")
     print(f"  Resultado: {result}")
     print(f"  → El usuario aprueba (✓) en el board — el cierre es automático, no se requiere acción del agente.")
+    print_inbox_if_pending(tid)
 
 def cmd_finalize(args):
     """bt finalize <id> — cierra la tarea definitivamente (ejecutar tras aprobación del usuario)."""

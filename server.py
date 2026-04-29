@@ -255,6 +255,61 @@ def dispatch_task_by_id(task_id: str):
     write_windows(windows)
 
 
+def relaunch_task(task_id: str):
+    """Relanza el agente para una tarea huérfana (ventana tmux muerta).
+    El agente recibe un prompt de retomar: lee bt show para el historial
+    y bt inbox para los mensajes pendientes del usuario."""
+    task_file = BOARD_DIR / "tasks" / f"{task_id}.md"
+    if not task_file.exists():
+        return False
+
+    workspace_id, agent_id = "", DEFAULT_AGENT
+    for line in task_file.read_text().splitlines():
+        if line.startswith("Workspace: "): workspace_id = line[11:].strip()
+        elif line.startswith("Owner: "):   agent_id     = line[7:].strip()
+
+    cfg      = load_config()
+    ws_info  = cfg.get("workspaces", {}).get(workspace_id, {})
+    ws_path  = ws_info.get("path", str(BOARD_DIR))
+    ws_label = ws_info.get("label", workspace_id or "board")
+
+    if not Path(ws_path).exists():
+        ws_path = str(BOARD_DIR)
+    if agent_id not in AGENT_CMDS:
+        agent_id = DEFAULT_AGENT
+
+    agents_md = (BOARD_DIR / "AGENTS.md").read_text() if (BOARD_DIR / "AGENTS.md").exists() else ""
+    prompt = "\n".join([
+        agents_md,
+        "---",
+        f"Tarea a retomar: {task_id}",
+        f"Workspace: {ws_label} ({ws_path})",
+        "",
+        "El agente anterior se detuvo. Retomá el trabajo desde donde quedó:",
+        f"1. bt show {task_id}   → leer historial completo y qué se pidió",
+        f"2. bt inbox {task_id}  → leer mensajes nuevos del usuario",
+        f"3. bt start {task_id}  → marcar como in_progress y continuar",
+        "",
+        "No repitas trabajo ya hecho. Continuá desde el último progreso registrado.",
+    ])
+
+    slug     = task_id.replace("task-", "")[-22:]
+    bin_dirs = [str(SCRIPT_DIR), str(Path.home() / ".local" / "bin")]
+    cmd = (
+        f"export IT_BOARD_DIR={shlex.quote(str(BOARD_DIR))} && "
+        f"export PATH={shlex.quote(':'.join(bin_dirs))}:\"$PATH\" && "
+        f"cd {shlex.quote(ws_path)} && "
+        f"{AGENT_CMDS[agent_id]} {shlex.quote(prompt)}"
+    )
+    subprocess.run(["tmux", "new-session", "-d", "-s", TMUX_SESSION], capture_output=True)
+    subprocess.Popen(["tmux", "new-window", "-t", f"{TMUX_SESSION}:", "-n", slug, cmd])
+
+    windows = read_windows()
+    windows[task_id] = slug
+    write_windows(windows)
+    return True
+
+
 def sync_board_if_needed():
     """Llama a bt sync si algún task file es más nuevo que board.md."""
     board_file = BOARD_DIR / "board.md"
@@ -727,18 +782,38 @@ class Handler(BaseHTTPRequestHandler):
             return self.send_json(200, {"ok": True, "intervened": True, "task_id": task_id,
                                         "sent": response})
 
-        # Flujo normal: enviar mensaje al agente vía tmux
+        # Flujo normal: enviar mensaje al agente
         windows = read_windows()
         slug = windows.get(task_id) or task_id.replace("task-", "")[-22:]
 
+        if not blocker:
+            # In_progress: escribir al inbox ANTES de buscar la ventana — así el mensaje
+            # persiste incluso si el agente está detenido. Cuando relance, bt start
+            # llama print_inbox_if_pending y el agente verá el mensaje.
+            inbox_file = BOARD_DIR / "tasks" / f"{task_id}.inbox.md"
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            with open(inbox_file, "a") as f:
+                f.write(f"[{now_str}]\n[board] {response}\n\n---\n\n")
+
         window_idx = find_tmux_window(slug)
         if window_idx is None:
-            return self.send_json(404, {"error": f"Ventana tmux no encontrada para {task_id}"})
+            if blocker:
+                return self.send_json(404, {"error": f"Ventana tmux no encontrada para {task_id}"})
+            # Agente detenido: inbox ya escrito → relanzar automáticamente.
+            # El nuevo agente lee bt show (historial) + bt inbox (mensaje nuevo) y retoma.
+            relaunched = relaunch_task(task_id)
+            status = "relaunched" if relaunched else "queued"
+            return self.send_json(200, {"ok": True, "sent": response, status: True})
 
-        subprocess.run([
-            "tmux", "send-keys", "-t", f"{TMUX_SESSION}:{window_idx}",
-            response, "Enter"
-        ])
+        target = f"{TMUX_SESSION}:{window_idx}"
+        if blocker:
+            # Agente bloqueado y en el prompt interactivo → enviar texto directo
+            subprocess.run(["tmux", "send-keys", "-t", target, response, "Enter"])
+        else:
+            # Inbox ya escrito. Además hacer ping para entrega inmediata si el agente
+            # está en el prompt (idle entre turnos). Si está pensando, el ping queda en
+            # el buffer del tty y Claude lo lee al terminar el turno actual.
+            subprocess.run(["tmux", "send-keys", "-t", target, f"bt inbox {task_id}", "Enter"])
 
         self.send_json(200, {"ok": True, "sent": response, "window": window_idx})
 
