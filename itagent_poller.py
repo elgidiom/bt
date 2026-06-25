@@ -35,8 +35,9 @@ import itagent_common as ic
 POLL_INTERVAL = int(os.environ.get("ITAGENT_POLL_INTERVAL", "10"))
 DISPATCH_URL  = os.environ.get("ITAGENT_DISPATCH_URL", "http://localhost:8765/api/dispatch")
 WORKSPACE     = os.environ.get("ITAGENT_WORKSPACE", "it")
-REPLY_HELPER  = "/home/gidiom/.it-board/itagent_reply.py"
-BOARD_DIR     = os.environ.get("IT_BOARD_DIR", "/home/gidiom/.it-board")
+REPLY_HELPER   = "/home/gidiom/.it-board/itagent_reply.py"
+APPROVE_HELPER = "/home/gidiom/.it-board/itagent_approve.py"
+BOARD_DIR      = os.environ.get("IT_BOARD_DIR", "/home/gidiom/.it-board")
 
 # Base del server local (deriva de DISPATCH_URL: …/api/dispatch → …/api).
 _API_BASE   = DISPATCH_URL.rsplit("/", 1)[0]
@@ -53,15 +54,26 @@ AFFIRMATIVE = {
 
 def build_context(text, space, thread):
     reply_cmd = f"python3 {REPLY_HELPER} '{space}' 'TU_MENSAJE' '{thread}'"
+    approve_cmd = f"python3 {APPROVE_HELPER} TASK_ID 'TU_MENSAJE'"
     return "\n".join([
         text,
         "",
         "---",
         "[Canal: Google Chat] El usuario te escribió por Google Chat, NO por el board.",
-        "Para responderle, pedirle contexto o reportar avance, escribíle por ese mismo hilo ejecutando:",
-        f"  {reply_cmd}",
-        "(reemplazá TU_MENSAJE por el texto; mantené las comillas simples).",
-        "Usá ese canal como vía principal con el usuario. Igual registrá avance con bt log.",
+        "",
+        "• INFORMACIÓN GENERAL / avances (lo que la audiencia de ese hilo necesita ver):",
+        "  respondé en el MISMO hilo de origen con:",
+        f"    {reply_cmd}",
+        "  (reemplazá TU_MENSAJE; mantené las comillas simples).",
+        "",
+        "• APROBACIONES o PREGUNTAS que requieren DECISIÓN de Juan (cerrar, acción",
+        "  irreversible, elegir, pedir datos): NO las pidas en el hilo público.",
+        "  Mandalas al espacio privado de aprobaciones y bloqueá la task:",
+        f"    {approve_cmd}",
+        "    bt block TASK_ID \"esperando aprobación: <qué>\"   (o \"esperando input: <pregunta>\")",
+        "  Juan responde por ese hilo privado: 'dale/listo' cierra la task; otra cosa = instrucción.",
+        "",
+        "Igual registrá avance con bt log.",
         f"Space: {space}  Thread: {thread}",
     ])
 
