@@ -153,6 +153,68 @@ bt session close task-a task-b "handoff completo"
 
 If one of the linked tasks is finalized, `bt` closes any active/pending session automatically so no stale channel remains.
 
+## Google Chat bridge (`itagent`)
+
+Lets you talk to the agents from Google Chat instead of (or in addition to) the board UI.
+You `@itagent <request>` in a space; an agent picks it up, works the task, and replies **in the
+same Chat thread**. The board stays as the audit log behind the scenes.
+
+### Architecture
+
+```
+ Google Chat            NUBE (Apps Script, free)           LOCAL (this repo)
+ @itagent  ──POST──►  Chat App webhook                ──► itagent_poller (in server.py)
+                      - validates sender allowlist        - reads "inbound" tab every ~10s
+                      - writes a row to a Google Sheet     - new row → creates task + dispatches agent
+                                                           - acks in the thread
+        ▲                                                          │ tmux
+        └──────────  itagent_reply.py (Chat API) ◄──── claude agent (writes back to the thread)
+```
+
+- **Inbound (Chat → agent):** an Apps Script Chat App validates the sender and appends a row
+  `{ts, event_id, type, space, thread, sender, text, status, task_id}` to the `inbound` tab of a
+  Google Sheet. No public port on this machine is needed.
+- **Poller:** `server.py` starts `itagent_poller` in a background thread on boot
+  (`start_itagent_poller`). Each tick reads `pending` rows, marks them `processing`, creates a task
+  and dispatches an agent in tmux (`chat_create_and_launch`, same flow as `/api/dispatch` but
+  in-process), then marks the row `taken` and acks in the thread.
+- **Outbound (agent → you):** the agent's prompt is augmented with the Chat `space`/`thread` and the
+  exact `itagent_reply.py` command, so it replies directly via the Chat API. No outbound queue.
+
+### Files
+
+| File | Role |
+|------|------|
+| `itagent_common.py` | Shared helpers: service-account auth, read/write the Sheet queue, post to Chat |
+| `itagent_poller.py` | The bridge loop: drains `pending` rows → dispatch + ack. Standalone or embedded |
+| `itagent_reply.py` | One-shot helper the agent runs to write a message back to a thread |
+| `server.py` | Hosts the poller (`start_itagent_poller`) and `chat_create_and_launch` |
+
+### Config & secrets
+
+Environment overrides (all optional, sensible defaults):
+
+| Var | Default | Meaning |
+|-----|---------|---------|
+| `ITAGENT_SA_KEY` | `~/.it-board/itagent-poller-key.json` | Service-account key (gitignored) |
+| `ITAGENT_SHEET_ID` | the `inbound` queue Sheet | Queue spreadsheet |
+| `ITAGENT_POLL_INTERVAL` | `10` | Seconds between polls |
+| `ITAGENT_WORKSPACE` | `it` | Workspace agents are dispatched into |
+
+The service-account key (`itagent-poller-key.json`) is **gitignored** — never commit it. Auth uses
+the `spreadsheets` and `chat.bot` scopes. Security relies on the **email allowlist enforced in the
+Apps Script**: anyone who can `@itagent` would otherwise be dispatching agents that run with
+`--dangerously-skip-permissions` on this host.
+
+### Run it
+
+The poller starts automatically with `./bt serve` (best-effort; logs `poller deshabilitado` and keeps
+serving the board if the Google client libs or key are missing). To run the bridge standalone:
+
+```bash
+python3 itagent_poller.py   # dispatches via HTTP POST to /api/dispatch
+```
+
 ## What is still intentionally local
 
 - Agent binaries (`claude`, `codex`) must exist on the host

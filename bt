@@ -441,9 +441,12 @@ def task_set_result(tid, result):
 def task_set_blocker(tid, reason):
     path = TASKS_DIR / f"{tid}.md"
     if not path.exists(): return
-    content = path.read_text().replace("## Bloqueadores\nninguno",
-                                       f"## Bloqueadores\n{reason}")
+    content = re.sub(r'(## Bloqueadores\n).*?(?=\n## |\Z)', rf'\g<1>{reason}',
+                     path.read_text(), flags=re.DOTALL)
     path.write_text(content)
+
+def task_clear_blocker(tid):
+    task_set_blocker(tid, "ninguno")
 
 # ── comandos ──────────────────────────────────────────────────────────────────
 
@@ -470,6 +473,7 @@ def cmd_start(args):
     if not args: return print("Uso: bt start <id>")
     if not (tid := resolve_id(args[0])): return
     task_set_field(tid, "Status", "in_progress")
+    task_clear_blocker(tid)
     lines = BOARD_FILE.read_text().splitlines()
     # Detectar si la tarea está en Bloqueadas/Revisión/Programadas y moverla a Activas
     needs_move = False

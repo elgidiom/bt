@@ -9,3 +9,6 @@ para-revisar/*
 __pycache__/
 server.log
 .playwright-mcp/
+itagent-poller-key.json
+agent_sessions.json
+.codex
