@@ -44,6 +44,9 @@ def main():
         sys.exit(2)
     task_id = sys.argv[1]
     text = sys.argv[2]
+    # En espacios, la app sólo recibe mensajes que la @mencionan → el footer le
+    # dice a Juan exactamente cómo responder para que su respuesta llegue.
+    text = text + "\n\n_Para aprobar/cerrar: respondé en este hilo *@itagent dale* (o `listo`/`ok`). Cualquier otra cosa = instrucción._"
     msg = ic.post_message(APPROVALS_SPACE, text)          # hilo nuevo
     thread = (msg.get("thread") or {}).get("name", "")
     if thread:
